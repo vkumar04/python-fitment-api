@@ -1,4 +1,4 @@
-"""DSPy-based fitment assistant with optimized prompts and validation."""
+"""DSPy-based fitment assistant with LLM-driven vehicle specs validation."""
 
 from pathlib import Path
 
@@ -26,7 +26,7 @@ TRAINING_DATA = [
     # Chassis codes (no year in query)
     {
         "query": "e39 528i aggressive fitment",
-        "year": None,  # E39 = 1995-2003, but user didn't specify
+        "year": None,
         "make": "BMW",
         "model": "528i",
         "trim": "E39",
@@ -34,7 +34,7 @@ TRAINING_DATA = [
     },
     {
         "query": "FK8 Civic Type R flush",
-        "year": None,  # FK8 = 2017-2021, but user didn't specify
+        "year": None,
         "make": "Honda",
         "model": "Civic Type R",
         "trim": "FK8",
@@ -42,11 +42,28 @@ TRAINING_DATA = [
     },
     {
         "query": "e30 m3 wheels",
-        "year": None,  # E30 M3 = 1986-1991, but user didn't specify
+        "year": None,
         "make": "BMW",
         "model": "M3",
         "trim": "E30",
         "fitment_style": None,
+    },
+    # Invalid chassis+model combos (E30 M5 doesn't exist - parser should still extract correctly)
+    {
+        "query": "e30 m5 wheels",
+        "year": None,
+        "make": "BMW",
+        "model": "M5",  # M5, not "5 Series" - chassis code E30 + M5
+        "trim": "E30",
+        "fitment_style": None,
+    },
+    {
+        "query": "e36 m5 aggressive",
+        "year": None,
+        "make": "BMW",
+        "model": "M5",  # M5, not "5 Series"
+        "trim": "E36",
+        "fitment_style": "aggressive",
     },
     # Nicknames
     {
@@ -129,7 +146,7 @@ TRAINING_DATA = [
     # VW
     {
         "query": "mk7 golf r aggressive",
-        "year": None,  # MK7 = 2015-2021
+        "year": None,
         "make": "Volkswagen",
         "model": "Golf R",
         "trim": "MK7",
@@ -138,28 +155,95 @@ TRAINING_DATA = [
 ]
 
 
-# Simplified signatures - let DSPy optimize the prompts
 class ParseVehicleQuery(dspy.Signature):
-    """Extract vehicle info from a wheel fitment query. Only extract year if explicitly stated."""
+    """Extract vehicle info from a wheel fitment query. Only extract year if explicitly stated.
+
+    BMW CHASSIS CODE RULES:
+    - When query has "[chassis] [model]" like "e30 m5", extract model=M5, trim=E30
+    - E30, E36, E39, E46, E90, F30, G20 are chassis codes, NOT models
+    - M3, M5, M4 are models, NOT chassis codes
+    - "e30 m5" = make=BMW, model=M5, trim=E30 (NOT model="5 Series")
+    - "e39 m5" = make=BMW, model=M5, trim=E39
+    - "e30 m3" = make=BMW, model=M3, trim=E30
+    """
 
     query: str = dspy.InputField()
 
     year: int | None = dspy.OutputField(desc="Year if explicitly stated, else None")
     make: str | None = dspy.OutputField(desc="Vehicle manufacturer")
-    model: str | None = dspy.OutputField(desc="Vehicle model name")
+    model: str | None = dspy.OutputField(
+        desc="Vehicle model (M3, M5, Civic, WRX). For BMW, M3/M5/M4 are models, NOT E30/E36"
+    )
     trim: str | None = dspy.OutputField(
-        desc="Trim level or chassis code (e.g., STI, E39, FK8)"
+        desc="Chassis code (E30, E36, E39, FK8) or trim level (STI, Type R)"
     )
     fitment_style: str | None = dspy.OutputField(
         desc="aggressive, flush, tucked, or None"
     )
 
 
+class ValidateVehicleSpecs(dspy.Signature):
+    """Validate vehicle exists and return accurate wheel specifications.
+
+    You are a vehicle specifications expert. CRITICAL: Check chassis code + model validity FIRST.
+
+    STEP 1 - CHECK IF CHASSIS + MODEL IS VALID:
+    If trim contains a BMW chassis code (E30, E36, E39, etc.), verify the model exists for that chassis:
+    - E30 M5 = INVALID (E30 only had M3, set vehicle_exists=False)
+    - E36 M5 = INVALID (E36 only had M3, set vehicle_exists=False)
+    - E30 M4 = INVALID (M4 didn't exist until 2014, set vehicle_exists=False)
+    - E30 M3 = VALID
+    - E36 M3 = VALID
+    - E39 M5 = VALID
+    - E28 M5 = VALID
+    - E34 M5 = VALID
+
+    STEP 2 - IF VALID, RETURN SPECS:
+    Use chassis-specific specs:
+    - BMW E30/E21/2002: 4x100, 57.1mm bore, max 17", width 7-8.5"
+    - BMW E36-F series: 5x120, 72.6mm bore, max 19"
+    - BMW G-series (2019+): 5x112, 66.5mm bore
+    - Subaru pre-2015 WRX: 5x100
+    - Honda pre-2001 Civic: 4x100
+    """
+
+    year: int | None = dspy.InputField(desc="Vehicle year if known")
+    make: str | None = dspy.InputField(desc="Vehicle manufacturer")
+    model: str | None = dspy.InputField(desc="Vehicle model (M3, M5, Civic, etc.)")
+    trim: str | None = dspy.InputField(
+        desc="Chassis code or trim (E30, E36, E39, FK8, STI). CHECK THIS FOR VALIDITY."
+    )
+
+    vehicle_exists: bool = dspy.OutputField(
+        desc="FALSE if chassis+model invalid (E30 M5, E36 M5). TRUE only if combination actually existed."
+    )
+    invalid_reason: str | None = dspy.OutputField(
+        desc="If False: 'The [chassis] never had an [model]. Did you mean [suggestions]?' If True: null"
+    )
+    bolt_pattern: str = dspy.OutputField(
+        desc="Bolt pattern. E30=4x100, E36-F=5x120, G-series=5x112"
+    )
+    center_bore: float = dspy.OutputField(
+        desc="Center bore mm. E30=57.1, E36-F=72.6, G-series=66.5"
+    )
+    stud_size: str = dspy.OutputField(desc="Lug stud size like 'M12x1.5'")
+    max_wheel_diameter: int = dspy.OutputField(
+        desc="Max diameter. E30=17, E36=18, modern=19-20"
+    )
+    min_wheel_diameter: int = dspy.OutputField(
+        desc="Min diameter for brake clearance. Usually 15-17"
+    )
+    typical_width_range: str = dspy.OutputField(
+        desc="Width range. E30='7-8.5', modern='8-10'"
+    )
+    typical_offset_range: str = dspy.OutputField(desc="Offset range like '+25 to +45'")
+
+
 class GenerateFitmentResponse(dspy.Signature):
     """Generate Kansei wheel recommendations. ONLY recommend Kansei brand wheels."""
 
     vehicle_info: str = dspy.InputField(
-        desc="Vehicle details, bolt pattern, center bore"
+        desc="Vehicle details with validated specs (bolt pattern, center bore, size limits)"
     )
     fitment_data: str = dspy.InputField(
         desc="Community fitment specs (for reference) and KANSEI WHEELS section"
@@ -169,38 +253,39 @@ class GenerateFitmentResponse(dspy.Signature):
     response: str = dspy.OutputField(
         desc="""Generate Kansei wheel recommendations following these rules:
 
-1. ONLY recommend Kansei brand wheels - NEVER mention competitor brands (JNC, TSW, SSR, Work, Enkei, etc.)
-2. Use community fitment data to understand what wheel sizes fit, but DO NOT recommend those wheel brands
-3. List specific Kansei wheels from the KANSEI WHEELS section with model, size, offset, price, and URL
-4. If no Kansei wheels match the bolt pattern, clearly state that
-5. Include bolt pattern and center bore in your response
+1. ONLY recommend Kansei brand wheels - NEVER mention competitor brands
+2. Use the VALIDATED SPECS provided - these are accurate for this specific vehicle
+3. Only recommend wheel sizes within the max_wheel_diameter limit
+4. List specific Kansei wheels from the KANSEI WHEELS section with model, size, offset, price, and URL
+5. If no Kansei wheels match the bolt pattern or size constraints, clearly state that
 6. If no year was provided, do NOT make up a year
 7. Never hallucinate Kansei models that aren't in the provided data"""
     )
 
 
 class FitmentAssistant(dspy.Module):
-    """DSPy module for wheel fitment assistance with validation."""
+    """DSPy module for wheel fitment assistance with LLM-driven validation."""
 
     def __init__(self) -> None:
         super().__init__()
-        # Use ChainOfThought for query parsing (better for complex queries)
+        # Step 1: Parse the query
         self.parse_query = dspy.ChainOfThought(ParseVehicleQuery)
-        # Use Predict for response generation (faster)
+        # Step 2: Validate vehicle and get accurate specs (chain of thought for reasoning)
+        self.validate_specs = dspy.ChainOfThought(ValidateVehicleSpecs)
+        # Step 3: Generate response
         self.generate_response = dspy.Predict(GenerateFitmentResponse)
 
     def forward(
         self,
         query: str,
         fitment_data: str,
-        bolt_pattern: str,
         year: int | None = None,
         make: str | None = None,
         model: str | None = None,
         trim: str | None = None,
         fitment_style: str | None = None,
     ) -> dspy.Prediction:
-        # Parse the query if vehicle info not provided
+        # Step 1: Parse the query if vehicle info not provided
         if not any([year, make, model]):
             parsed = self.parse_query(query=query)
             year = parsed.year if parsed.year and str(parsed.year) != "None" else None
@@ -217,30 +302,82 @@ class FitmentAssistant(dspy.Module):
 
             # Validate: year should only be set if it was in the original query
             if year is not None:
-                # Check if year appears in the query
                 year_str = str(year)
                 if year_str not in query and not any(
                     year_str in part for part in query.split()
                 ):
-                    # LLM hallucinated a year - remove it
                     year = None
 
         # Validate year range
         if year is not None and not (1900 <= year <= 2030):
-            year = None  # Invalid year, treat as not specified
+            year = None
 
-        # Build vehicle info string
+        # Step 2: Validate vehicle and get accurate specs via LLM
+        specs = self.validate_specs(
+            year=year,
+            make=make,
+            model=model,
+            trim=trim,
+        )
+
+        # Check if vehicle is invalid
+        vehicle_exists = specs.vehicle_exists
+        if isinstance(vehicle_exists, str):
+            vehicle_exists = vehicle_exists.lower() == "true"
+
+        if not vehicle_exists:
+            invalid_reason = (
+                specs.invalid_reason or "This vehicle combination does not exist."
+            )
+            return dspy.Prediction(
+                response=f"**Vehicle Not Found**\n\n{invalid_reason}",
+                parsed={
+                    "year": year,
+                    "make": make,
+                    "model": model,
+                    "trim": trim,
+                    "fitment_style": fitment_style,
+                },
+                specs=None,
+                vehicle_exists=False,
+                needs_clarification=True,
+            )
+
+        # Extract validated specs
+        bolt_pattern = str(specs.bolt_pattern) if specs.bolt_pattern else "Unknown"
+        center_bore = float(specs.center_bore) if specs.center_bore else 0.0
+        max_diameter = int(specs.max_wheel_diameter) if specs.max_wheel_diameter else 20
+        min_diameter = int(specs.min_wheel_diameter) if specs.min_wheel_diameter else 15
+        width_range = (
+            str(specs.typical_width_range) if specs.typical_width_range else "7-9"
+        )
+        offset_range = (
+            str(specs.typical_offset_range)
+            if specs.typical_offset_range
+            else "+20 to +45"
+        )
+        stud_size = str(specs.stud_size) if specs.stud_size else "M12x1.5"
+
+        # Build vehicle info string with validated specs
         year_display = str(year) if year else "not specified"
         vehicle_info = f"""Year: {year_display}
 Make: {make or "not specified"}
 Model: {model or "not specified"}
-Trim: {trim or "not specified"}
+Trim/Chassis: {trim or "not specified"}
 Fitment Style: {fitment_style or "not specified"}
-Bolt Pattern: {bolt_pattern}
 
-IMPORTANT: If year is "not specified", do NOT make up a year in your response."""
+VALIDATED SPECS (use these - they are accurate for this vehicle):
+- Bolt Pattern: {bolt_pattern}
+- Center Bore: {center_bore}mm
+- Stud Size: {stud_size}
+- Wheel Diameter: {min_diameter}" to {max_diameter}" (DO NOT recommend larger than {max_diameter}")
+- Typical Width: {width_range}"
+- Typical Offset: {offset_range}
 
-        # Generate the fitment response
+IMPORTANT: If year is "not specified", do NOT make up a year in your response.
+IMPORTANT: Only recommend wheels up to {max_diameter}" diameter for this vehicle."""
+
+        # Step 3: Generate the fitment response
         result = self.generate_response(
             vehicle_info=vehicle_info,
             fitment_data=fitment_data,
@@ -249,8 +386,7 @@ IMPORTANT: If year is "not specified", do NOT make up a year in your response.""
 
         response_text = result.response
 
-        # Post-validation: if no year was provided but response contains a fabricated year
-        # Strip out fabricated years from the response
+        # Post-validation: strip fabricated years
         if year is None and _contains_fabricated_year(response_text, query):
             response_text = _remove_fabricated_years(response_text, query)
 
@@ -262,8 +398,17 @@ IMPORTANT: If year is "not specified", do NOT make up a year in your response.""
                 "model": model,
                 "trim": trim,
                 "fitment_style": fitment_style,
-                "bolt_pattern": bolt_pattern,
             },
+            specs={
+                "bolt_pattern": bolt_pattern,
+                "center_bore": center_bore,
+                "stud_size": stud_size,
+                "max_wheel_diameter": max_diameter,
+                "min_wheel_diameter": min_diameter,
+                "typical_width_range": width_range,
+                "typical_offset_range": offset_range,
+            },
+            vehicle_exists=True,
             needs_clarification=False,
         )
 
@@ -272,11 +417,8 @@ def _contains_fabricated_year(response: str, query: str) -> bool:
     """Check if response contains a year that wasn't in the original query."""
     import re
 
-    # Find all 4-digit years in response (1900-2030 range)
     response_years = set(re.findall(r"\b(19\d{2}|20[0-2]\d|2030)\b", response))
     query_years = set(re.findall(r"\b(19\d{2}|20[0-2]\d|2030)\b", query))
-
-    # If response has years that query doesn't, they might be fabricated
     fabricated = response_years - query_years
     return len(fabricated) > 0
 
@@ -285,20 +427,13 @@ def _remove_fabricated_years(response: str, query: str) -> str:
     """Remove fabricated years from response, especially in the title line."""
     import re
 
-    # Find years in query (these are allowed)
     query_years = set(re.findall(r"\b(19\d{2}|20[0-2]\d|2030)\b", query))
-
-    # Find years in response that aren't in query
     response_years = set(re.findall(r"\b(19\d{2}|20[0-2]\d|2030)\b", response))
     fabricated_years = response_years - query_years
 
-    # Remove fabricated years from title lines (e.g., "**1997 BMW 528i**" -> "**BMW 528i**")
     for year in fabricated_years:
-        # Remove year from bold title pattern
         response = re.sub(rf"\*\*{year}\s+", "**", response)
-        # Remove year from start of lines
         response = re.sub(rf"^{year}\s+", "", response, flags=re.MULTILINE)
-        # Remove standalone year references in title context
         response = re.sub(rf"(\*\*[^*]*){year}\s*([^*]*\*\*)", r"\1\2", response)
 
     return response
@@ -307,9 +442,8 @@ def _remove_fabricated_years(response: str, query: str) -> str:
 def _parse_metric(example: dspy.Example, prediction: dspy.Prediction) -> float:
     """Metric for evaluating query parsing accuracy."""
     score = 0.0
-    total = 5.0  # 5 fields to check
+    total = 5.0
 
-    # Check each field
     if example.year == prediction.year:
         score += 1.0
     elif example.year is None and prediction.year is None:
@@ -360,12 +494,7 @@ def create_fitment_assistant(
     model: str = "openai/gpt-4o-mini",
     optimize: bool = False,
 ) -> FitmentAssistant:
-    """Create and configure a FitmentAssistant with the specified model.
-
-    Args:
-        model: The LLM model to use
-        optimize: If True, run BootstrapFewShot optimization (slow, do once)
-    """
+    """Create and configure a FitmentAssistant with the specified model."""
     lm = dspy.LM(model, max_tokens=512)
     dspy.configure(lm=lm)
 
@@ -380,14 +509,13 @@ def create_fitment_assistant(
         try:
             assistant.load(str(optimized_path))
         except Exception:
-            pass  # Use unoptimized if load fails
+            pass
 
     return assistant
 
 
 def _optimize_assistant(assistant: FitmentAssistant, lm: dspy.LM) -> FitmentAssistant:
     """Run BootstrapFewShot optimization on the assistant."""
-    # Create training examples
     trainset = [
         dspy.Example(
             query=d["query"],
@@ -400,23 +528,19 @@ def _optimize_assistant(assistant: FitmentAssistant, lm: dspy.LM) -> FitmentAssi
         for d in TRAINING_DATA
     ]
 
-    # Create optimizer
     optimizer = dspy.BootstrapFewShot(
         metric=_parse_metric,
         max_bootstrapped_demos=4,
         max_labeled_demos=4,
     )
 
-    # Optimize the parse_query module
     optimized = optimizer.compile(
         assistant.parse_query,
         trainset=trainset,
     )
 
-    # Replace with optimized version
     assistant.parse_query = optimized
 
-    # Save optimized weights
     optimized_path = Path(__file__).parent / "dspy_optimized.json"
     try:
         assistant.save(str(optimized_path))
@@ -427,7 +551,7 @@ def _optimize_assistant(assistant: FitmentAssistant, lm: dspy.LM) -> FitmentAssi
 
 
 def optimize_and_save(model: str = "openai/gpt-4o-mini") -> None:
-    """Run optimization and save the results. Call this once to generate optimized prompts."""
+    """Run optimization and save the results."""
     print("Starting DSPy optimization...")
     lm = dspy.LM(model, max_tokens=512)
     dspy.configure(lm=lm)

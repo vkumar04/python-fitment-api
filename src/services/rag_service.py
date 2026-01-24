@@ -261,65 +261,6 @@ IMPORTANT NOTES:
 - When showing data from different years, explain that specs may vary but provide the data as a helpful reference
 """
 
-    # Bolt patterns by make - these are defaults, model-specific logic in _get_bolt_pattern
-    # Center bores included for reference
-    BOLT_PATTERNS: dict[str, str | list[tuple[int, int, str]]] = {
-        # Japanese makes
-        "honda": "5x114.3",  # 10th gen Civic (2016+), Accord, etc. Center bore: 64.1mm
-        "acura": "5x114.3",  # Center bore: 64.1mm
-        "toyota": "5x114.3",  # Most modern Toyotas. Center bore: 60.1mm
-        "lexus": "5x114.3",  # Center bore: 60.1mm
-        "nissan": "5x114.3",  # Center bore: 66.1mm
-        "datsun": "4x114.3",  # Classic 240Z, 280Z. Center bore: 66.1mm
-        "infiniti": "5x114.3",  # Center bore: 66.1mm
-        "mazda": "5x114.3",  # Most models (Miata is 4x100). Center bore: 67.1mm
-        "subaru": "5x114.3",  # 2015+ WRX/STI. Center bore: 56.1mm
-        "mitsubishi": "5x114.3",  # Center bore: 67.1mm
-        # Korean makes
-        "hyundai": "5x114.3",  # Center bore: 67.1mm
-        "kia": "5x114.3",  # Center bore: 67.1mm
-        "genesis": "5x114.3",  # Center bore: 67.1mm
-        # American makes
-        "ford": "5x114.3",  # Mustang, Focus, etc. Center bore: 70.5mm (Mustang: 67.1mm)
-        "chevrolet": "5x120",  # Camaro. Center bore: 67.1mm. Trucks are 6x139.7
-        "dodge": "5x115",  # Challenger/Charger. Center bore: 71.5mm
-        # German makes - complex, handled in _get_bolt_pattern
-        "bmw": "5x120",  # Default, but G-series (2019+) is 5x112. Center bore: 72.6mm
-        "mini": "5x112",  # F-series (2014+). Center bore: 56.1mm
-        "volkswagen": "5x112",  # MK5+ Golf. Center bore: 57.1mm
-        "audi": "5x112",  # Center bore: 57.1mm (66.5mm on some)
-        "mercedes-benz": "5x112",  # Center bore: 66.6mm
-        "porsche": "5x130",  # Center bore: 71.6mm
-        # Electric
-        "tesla": "5x114.3",  # Model 3/Y. Center bore: 64.1mm. S/X are 5x120
-    }
-
-    # Center bore by make (mm) - important for hub-centric fit
-    CENTER_BORES: dict[str, float] = {
-        "honda": 64.1,
-        "acura": 64.1,
-        "toyota": 60.1,
-        "lexus": 60.1,
-        "nissan": 66.1,
-        "infiniti": 66.1,
-        "mazda": 67.1,
-        "subaru": 56.1,
-        "mitsubishi": 67.1,
-        "hyundai": 67.1,
-        "kia": 67.1,
-        "genesis": 67.1,
-        "ford": 70.5,
-        "chevrolet": 67.1,
-        "dodge": 71.5,
-        "bmw": 72.6,
-        "mini": 56.1,
-        "volkswagen": 57.1,
-        "audi": 57.1,
-        "mercedes-benz": 66.6,
-        "porsche": 71.6,
-        "tesla": 64.1,
-    }
-
     def __init__(self, use_dspy: bool = True) -> None:
         self.supabase: Client = create_client(
             os.getenv("SUPABASE_URL", ""),
@@ -335,317 +276,6 @@ IMPORTANT NOTES:
             from .dspy_fitment import create_fitment_assistant
 
             _dspy_assistant = create_fitment_assistant("openai/gpt-4o-mini")
-
-    # BMW chassis codes and their bolt patterns
-    # E/F series = 5x120, G series (2019+) = 5x112
-    # Exception: E21/E30 small cars = 4x100
-    BMW_4x100_MODELS = {"2002", "1600", "1602", "1802", "2000", "2002tii", "e21", "e30"}
-    BMW_5x112_MODELS = {
-        "g20",
-        "g21",
-        "g22",
-        "g23",
-        "g26",
-        "g80",
-        "g81",
-        "g82",
-        "g83",
-        "g42",
-        "g87",
-    }
-
-    # Mazda Miata uses 4x100 (all generations)
-    MAZDA_4x100_MODELS = {"miata", "mx-5", "mx5", "roadster"}
-
-    # Subaru models with 5x100 (older WRX/STI, BRZ, etc.)
-    SUBARU_5x100_MODELS = {"brz", "frs", "fr-s", "86", "gt86"}
-
-    def _validate_vehicle_exists(
-        self,
-        original_query: str,
-        make: str | None = None,
-        model: str | None = None,
-        year: int | None = None,
-        trim: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Use LLM to validate if a vehicle combination actually exists.
-        Uses the original query for better accuracy since parsed values may be wrong.
-        Returns {"valid": bool, "reason": str, "suggestion": str | None}
-        """
-        if not original_query.strip():
-            return {
-                "valid": True,
-                "reason": "No vehicle info",
-                "suggestion": None,
-            }
-
-        client = _get_openai_client()
-
-        # Use original query - parsing can misinterpret (e.g., "e30 m5" -> "5 Series")
-        vehicle_str = original_query.strip()
-
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a vehicle expert. Determine if the vehicle mentioned in the query actually exists/existed.
-
-The query may include extra words like "wheels", "fitment", "aggressive", "flush" - IGNORE these and focus only on the vehicle (year, make, model, chassis code).
-
-Return ONLY a JSON object:
-{"valid": true/false, "reason": "brief explanation", "suggestion": "correct vehicle if invalid, else null"}
-
-Examples:
-- "e30 m5 wheels" -> {"valid": false, "reason": "The E30 chassis never had an M5. The E30 only had the M3.", "suggestion": "BMW E30 M3 or BMW E28 M5"}
-- "e30 m3 aggressive fitment" -> {"valid": true, "reason": "The BMW E30 M3 was produced 1986-1991", "suggestion": null}
-- "2020 Honda Civic flush" -> {"valid": true, "reason": "The 2020 Honda Civic exists", "suggestion": null}
-- "Toyota Supra MK4" -> {"valid": true, "reason": "The MK4 Supra (A80) was produced 1993-2002", "suggestion": null}
-- "Ford Mustang Hellcat" -> {"valid": false, "reason": "Hellcat is a Dodge engine/trim, not Ford", "suggestion": "Ford Mustang GT or Dodge Challenger Hellcat"}
-- "e36 m5" -> {"valid": false, "reason": "The E36 chassis only had the M3, never the M5", "suggestion": "BMW E36 M3 or BMW E34 M5"}
-
-Be strict - if a specific chassis code + model combination never existed, mark it invalid.""",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"Does this vehicle exist? {vehicle_str}",
-                    },
-                ],
-                max_tokens=150,
-                temperature=0,
-            )
-
-            content = response.choices[0].message.content or ""
-            # Parse JSON response
-            import re
-
-            json_match = re.search(r"\{[^}]+\}", content)
-            if json_match:
-                result = json.loads(json_match.group())
-                return {
-                    "valid": result.get("valid", True),
-                    "reason": result.get("reason", ""),
-                    "suggestion": result.get("suggestion"),
-                }
-        except Exception:
-            pass
-
-        # Default to valid if LLM fails
-        return {"valid": True, "reason": "Could not validate", "suggestion": None}
-
-    def _get_vehicle_specs_from_llm(
-        self, make: str, year: int | None, model: str
-    ) -> dict[str, Any] | None:
-        """
-        Get OEM specs for a vehicle using LLM knowledge.
-        More reliable than web scraping.
-        """
-        client = _get_openai_client()
-
-        vehicle_str = f"{year} {make} {model}" if year else f"{make} {model}"
-
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a vehicle specifications expert. Return ONLY a JSON object with wheel specs.
-Be precise - bolt patterns changed across generations (e.g., BMW G-series uses 5x112, F-series uses 5x120).
-
-Return format:
-{"bolt_pattern": "5x114.3", "center_bore": 64.1, "stud_size": "M12x1.5"}
-
-Rules:
-- bolt_pattern: format as "5x114.3" (lugs x PCD in mm)
-- center_bore: in mm (e.g., 64.1, 72.6, 56.1)
-- stud_size: format as "M12x1.5" or "M14x1.5"
-- If unsure, return null for that field
-- Return ONLY valid JSON, no explanation""",
-                    },
-                    {
-                        "role": "user",
-                        "content": f"What are the wheel specs for a {vehicle_str}?",
-                    },
-                ],
-                max_tokens=100,
-                temperature=0,  # Deterministic for factual data
-            )
-
-            content = response.choices[0].message.content or ""
-            # Parse JSON response
-            import re
-
-            json_match = re.search(r"\{[^}]+\}", content)
-            if json_match:
-                return json.loads(json_match.group())
-            return None
-        except Exception:
-            return None
-
-    def _get_bolt_pattern(
-        self, make: str | None, year: int | None = None, model: str | None = None
-    ) -> str:
-        """
-        Get bolt pattern for a vehicle.
-
-        Priority:
-        1. Hardcoded patterns for known special cases (most reliable)
-        2. Dynamic lookup from wheel-size.com (can be unreliable)
-        3. Default patterns by make
-        """
-        if not make:
-            return "Unknown"
-
-        make_lower = make.lower()
-        model_lower = (model or "").lower().replace("-", "").replace(" ", "")
-
-        # BMW - complex logic based on chassis generation
-        if make_lower == "bmw":
-            # Check for G-series chassis codes = 5x112
-            for g_chassis in self.BMW_5x112_MODELS:
-                if g_chassis in model_lower:
-                    return "5x112"
-            # G-series by year (if no chassis code specified)
-            # M3/M4 G80/G82 started 2021
-            if year and year >= 2021:
-                if any(m in model_lower for m in ["m3", "m4"]):
-                    return "5x112"
-            # 3/4 series G20/G22 started 2019
-            if year and year >= 2019:
-                if any(
-                    m in model_lower
-                    for m in ["3series", "4series", "330", "340", "430", "440"]
-                ):
-                    return "5x112"
-            # 5/7 series G30/G11 started 2017 - still 5x112
-            if year and year >= 2017:
-                if any(
-                    m in model_lower
-                    for m in ["5series", "7series", "530", "540", "550", "740", "750"]
-                ):
-                    return "5x112"
-            # Check for old small BMWs (4x100)
-            for small_model in self.BMW_4x100_MODELS:
-                if small_model in model_lower:
-                    return "4x100"
-            # E30 M3 specifically
-            if "m3" in model_lower and year and year <= 1991:
-                return "4x100"
-            # Default BMW = 5x120 (E/F series, pre-G series)
-            return "5x120"
-
-        # Mazda - Miata is 4x100
-        if make_lower == "mazda":
-            for miata_name in self.MAZDA_4x100_MODELS:
-                if miata_name in model_lower:
-                    return "4x100"
-            return "5x114.3"
-
-        # Subaru - BRZ/86 and older WRX are 5x100
-        if make_lower == "subaru":
-            for model_5x100 in self.SUBARU_5x100_MODELS:
-                if model_5x100 in model_lower:
-                    return "5x100"
-            # Pre-2015 WRX/STI were 5x100
-            if (
-                year
-                and year < 2015
-                and any(m in model_lower for m in ["wrx", "sti", "impreza"])
-            ):
-                return "5x100"
-            return "5x114.3"
-
-        # Toyota - special cases
-        if make_lower == "toyota":
-            # GR86/86 is 5x100
-            if any(m in model_lower for m in ["86", "gt86", "gr86"]):
-                return "5x100"
-            # Supra (A90) uses BMW platform = 5x112
-            if "supra" in model_lower and year and year >= 2019:
-                return "5x112"
-            return "5x114.3"
-
-        # Scion FR-S is 5x100
-        if make_lower == "scion":
-            if "frs" in model_lower or "fr-s" in model_lower:
-                return "5x100"
-            return "5x114.3"
-
-        # Honda - pre-2001 Civic was 4x100
-        if make_lower == "honda":
-            if "civic" in model_lower and year and year <= 2000:
-                return "4x100"
-            return "5x114.3"
-
-        # Acura - NSX uses 5x120
-        if make_lower == "acura":
-            if "nsx" in model_lower:
-                return "5x120"
-            return "5x114.3"
-
-        # Tesla - Model S/X are 5x120, Model 3/Y are 5x114.3
-        if make_lower == "tesla":
-            if any(
-                m in model_lower for m in ["model s", "models", "model x", "modelx"]
-            ):
-                return "5x120"
-            return "5x114.3"
-
-        # Ford - trucks and Focus RS have different patterns
-        if make_lower == "ford":
-            # F-150, F-250, F-350 trucks = 6x135
-            if any(
-                m in model_lower
-                for m in ["f150", "f-150", "f250", "f-250", "f350", "f-350"]
-            ):
-                return "6x135"
-            # Focus RS uses 5x108
-            if "focus" in model_lower and "rs" in model_lower:
-                return "5x108"
-            return "5x114.3"
-
-        # Chevrolet - trucks vs cars
-        if make_lower == "chevrolet":
-            # Silverado, Colorado, Tahoe, Suburban = 6x139.7
-            if any(
-                m in model_lower for m in ["silverado", "colorado", "tahoe", "suburban"]
-            ):
-                return "6x139.7"
-            # Camaro, Corvette = 5x120
-            return "5x120"
-
-        # Default lookup from BOLT_PATTERNS
-        pattern_data = self.BOLT_PATTERNS.get(make_lower)
-        if pattern_data is None:
-            return "Unknown"
-
-        if isinstance(pattern_data, str):
-            return pattern_data
-
-        # List of year ranges
-        if year:
-            for start_year, end_year, pattern in pattern_data:
-                if start_year <= year <= end_year:
-                    return pattern
-
-        # Return most recent pattern
-        if pattern_data:
-            return pattern_data[-1][2]
-
-        return "Unknown"
-
-    def _get_center_bore(
-        self, make: str | None, year: int | None = None, model: str | None = None
-    ) -> float | None:
-        """Get center bore for a vehicle."""
-        if not make:
-            return None
-
-        # Fallback to hardcoded (LLM lookup is done together with bolt pattern if needed)
-        return self.CENTER_BORES.get(make.lower())
 
     def parse_query(self, query: str) -> dict[str, Any]:
         """Use DSPy to extract year, make, model, and fitment style from natural language."""
@@ -993,10 +623,25 @@ Rules:
         fitment_style: str | None = None,
         limit: int = 10,
     ) -> dict[str, Any]:
-        """Answer a question using RAG with DSPy."""
+        """Answer a question using RAG with DSPy.
+
+        DSPy handles:
+        1. Query parsing (year, make, model, trim, fitment_style)
+        2. Vehicle validation (does this vehicle exist?)
+        3. Specs lookup (bolt pattern, center bore, wheel size limits)
+        4. Response generation
+        """
         global _dspy_assistant
 
-        # Quick parse to get make/model for search (use cached if available)
+        if not self.use_dspy or not _dspy_assistant:
+            return {
+                "answer": "DSPy not initialized. Please check configuration.",
+                "sources": [],
+                "parsed": {},
+                "data_source": "error",
+            }
+
+        # Quick parse to get make/model for database search
         parsed: dict[str, Any] = {}
         if not any([year, make, model, fitment_style]):
             parsed = self.parse_query(query)
@@ -1005,13 +650,13 @@ Rules:
             model = parsed.get("model") or model
             fitment_style = parsed.get("fitment_style") or fitment_style
 
-        # Build search query and get results
+        trim = parsed.get("trim")
+
+        # Build search query and get results from database
         search_query_parts = [p for p in [make, model] if p]
         search_query = " ".join(search_query_parts) if search_query_parts else query
 
-        # Track data source type for response
-        data_source = "exact"  # exact, similar, or llm_knowledge
-
+        data_source = "exact"
         search_results = self.search(
             search_query, year, make, model, fitment_setup, fitment_style, limit
         )
@@ -1021,8 +666,6 @@ Rules:
             search_results = self.search(
                 search_query, None, make, model, fitment_setup, None, limit
             )
-            if search_results:
-                data_source = "exact"  # Still exact make/model, just different year
 
         # Fallback 2: Similar vehicles
         if not search_results and make:
@@ -1034,10 +677,7 @@ Rules:
         if not search_results:
             data_source = "llm_knowledge"
 
-        # Get bolt pattern (year and model-aware for older vehicles)
-        bolt_pattern = self._get_bolt_pattern(make, year, model)
-
-        # Build fitment data context with source info
+        # Build fitment data context
         if data_source == "exact":
             context = "\n\n".join(
                 [
@@ -1054,101 +694,71 @@ Rules:
                 )
             context = "\n\n".join(context_parts)
         else:
-            context = ""
+            context = "(No community fitment records in database)"
 
-        # Get matching Kansei wheels
+        # Call DSPy assistant - it handles validation, specs lookup, and response generation
+        result = _dspy_assistant(
+            query=query,
+            fitment_data=context,
+            year=year,
+            make=make,
+            model=model,
+            trim=trim,
+            fitment_style=fitment_style,
+        )
+
+        # Check if vehicle validation failed
+        if not result.vehicle_exists:
+            return {
+                "answer": result.response,
+                "sources": [],
+                "parsed": result.parsed,
+                "specs": None,
+                "vehicle_exists": False,
+                "data_source": "invalid_vehicle",
+            }
+
+        # Get specs from DSPy result
+        specs = result.specs or {}
+        bolt_pattern = specs.get("bolt_pattern", "Unknown")
+
+        # Get matching Kansei wheels based on validated specs
         kansei_recommendations = format_kansei_recommendations(
             bolt_pattern=bolt_pattern,
             fitment_specs=search_results,
             offset_tolerance=15,
         )
 
-        # Get center bore
-        center_bore = self._get_center_bore(make, year, model)
-        center_bore_str = f"{center_bore}mm" if center_bore else "check vehicle specs"
+        # Append Kansei recommendations if not already in response
+        answer = result.response
+        if kansei_recommendations and "KANSEI" not in answer.upper():
+            answer += f"\n\n{kansei_recommendations}"
 
-        # Build data context description for DSPy
-        if data_source == "exact":
-            data_description = f"""Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
-
-COMMUNITY FITMENT DATA (use specs for reference only, DO NOT recommend these wheel brands):
-{context if context else "(No community fitment records)"}"""
-        elif data_source == "similar":
-            data_description = f"""Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
-
-REFERENCE DATA (from similar vehicles - use specs for reference only, DO NOT recommend these wheel brands):
-{context}"""
-        else:
-            data_description = f"""Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
-
-(No fitment data in database)
-Only recommend Kansei wheels from the KANSEI WHEELS section below."""
-
-        # Add Kansei wheel info to the context
-        if kansei_recommendations:
-            data_description += f"\n\n{kansei_recommendations}"
-
-        # Use DSPy for response generation
-        if self.use_dspy and _dspy_assistant:
-            result = _dspy_assistant(
-                query=query,
-                fitment_data=data_description,
-                bolt_pattern=bolt_pattern,
+        # Auto-save LLM-generated fitment for future reference
+        pending_id = None
+        if data_source == "llm_knowledge":
+            pending_id = self.save_pending_fitment(
                 year=year,
                 make=make,
                 model=model,
-                trim=parsed.get("trim"),
+                trim=trim,
                 fitment_style=fitment_style,
+                bolt_pattern=bolt_pattern,
+                notes=f"Query: {query}",
             )
 
-            # Append Kansei recommendations to the answer if not already included
-            answer = result.response
-            if kansei_recommendations and "KANSEI" not in answer.upper():
-                answer += f"\n\n{kansei_recommendations}"
-
-            # Auto-save LLM-generated fitment for future reference
-            pending_id = None
-            if data_source == "llm_knowledge":
-                pending_id = self.save_pending_fitment(
-                    year=year,
-                    make=make,
-                    model=model,
-                    trim=parsed.get("trim"),
-                    fitment_style=fitment_style,
-                    bolt_pattern=bolt_pattern,
-                    notes=f"Query: {query}",
-                )
-
-            return {
-                "answer": answer,
-                "sources": search_results,
-                "parsed": result.parsed,
-                "needs_clarification": result.needs_clarification,
-                "data_source": data_source,
-                "pending_fitment_id": pending_id,
-                "kansei_matches": find_matching_kansei_wheels(bolt_pattern)
-                if bolt_pattern != "Unknown"
-                else [],
-            }
-
-        # Fallback to simple response if DSPy not available
-        answer_text = "DSPy not initialized. Please check configuration."
-
         return {
-            "answer": answer_text,
+            "answer": answer,
             "sources": search_results,
-            "parsed": {
-                "year": year,
-                "make": make,
-                "model": model,
-                "trim": parsed.get("trim"),
-                "fitment_style": fitment_style,
-                "bolt_pattern": bolt_pattern,
-            },
+            "parsed": result.parsed,
+            "specs": specs,
+            "vehicle_exists": True,
+            "needs_clarification": result.needs_clarification,
             "data_source": data_source,
+            "pending_fitment_id": pending_id,
+            "kansei_matches": find_matching_kansei_wheels(bolt_pattern)
+            if bolt_pattern != "Unknown"
+            else [],
         }
 
     def get_makes(self) -> list[str]:
@@ -1192,8 +802,15 @@ Only recommend Kansei wheels from the KANSEI WHEELS section below."""
     ) -> Generator[str, None, dict[str, Any]]:
         """
         Streaming version of ask() - yields SSE events as they come in.
-        Returns metadata dict at the end.
+
+        Uses DSPy for vehicle validation and specs lookup (non-streaming),
+        then streams the response generation from OpenAI.
         """
+        global _dspy_assistant
+        import uuid
+
+        message_id = f"msg_{uuid.uuid4().hex}"
+
         # Parse query to get vehicle info
         parsed: dict[str, Any] = {}
         if not any([year, make, model, fitment_style]):
@@ -1203,41 +820,71 @@ Only recommend Kansei wheels from the KANSEI WHEELS section below."""
             model = parsed.get("model") or model
             fitment_style = parsed.get("fitment_style") or fitment_style
 
-        # Validate vehicle exists (catches invalid combinations like E30 M5)
         trim = parsed.get("trim")
-        validation = self._validate_vehicle_exists(query, make, model, year, trim)
 
-        if not validation.get("valid", True):
-            # Vehicle doesn't exist - return early with error message
-            import uuid
+        # Use DSPy to validate vehicle and get specs (non-streaming step)
+        if self.use_dspy and _dspy_assistant:
+            # Run the validation step from DSPy
+            specs_result = _dspy_assistant.validate_specs(
+                year=year,
+                make=make,
+                model=model,
+                trim=trim,
+            )
 
-            message_id = f"msg_{uuid.uuid4().hex}"
+            # Check if vehicle is invalid
+            vehicle_exists = specs_result.vehicle_exists
+            if isinstance(vehicle_exists, str):
+                vehicle_exists = vehicle_exists.lower() == "true"
 
-            error_msg = "**Vehicle Not Found**\n\n"
-            error_msg += "The vehicle you specified doesn't appear to exist: "
-            error_msg += f"{str(year) + ' ' if year else ''}{make or ''} {model or ''}"
-            if trim:
-                error_msg += f" ({trim})"
-            error_msg += f"\n\n**Reason:** {validation.get('reason', 'Invalid vehicle combination')}"
+            if not vehicle_exists:
+                error_msg = f"**Vehicle Not Found**\n\n{specs_result.invalid_reason or 'This vehicle combination does not exist.'}"
 
-            if validation.get("suggestion"):
-                error_msg += f"\n\n**Did you mean:** {validation['suggestion']}"
+                yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'text-start', 'id': message_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'text-delta', 'id': message_id, 'delta': error_msg})}\n\n"
+                yield f"data: {json.dumps({'type': 'text-end', 'id': message_id})}\n\n"
+                yield f"data: {json.dumps({'type': 'finish', 'finishReason': 'stop'})}\n\n"
+                yield "data: [DONE]\n\n"
+                return {
+                    "answer": error_msg,
+                    "sources": [],
+                    "parsed": parsed,
+                    "vehicle_exists": False,
+                    "data_source": "invalid_vehicle",
+                }
 
-            error_msg += "\n\nPlease check your vehicle information and try again."
-
-            yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
-            yield f"data: {json.dumps({'type': 'text-start', 'id': message_id})}\n\n"
-            yield f"data: {json.dumps({'type': 'text-delta', 'id': message_id, 'delta': error_msg})}\n\n"
-            yield f"data: {json.dumps({'type': 'text-end', 'id': message_id})}\n\n"
-            yield f"data: {json.dumps({'type': 'finish', 'finishReason': 'stop'})}\n\n"
-            yield "data: [DONE]\n\n"
-            return {
-                "answer": error_msg,
-                "sources": [],
-                "parsed": parsed,
-                "data_source": "invalid_vehicle",
-                "validation": validation,
-            }
+            # Extract validated specs
+            bolt_pattern = (
+                str(specs_result.bolt_pattern)
+                if specs_result.bolt_pattern
+                else "Unknown"
+            )
+            center_bore = (
+                float(specs_result.center_bore) if specs_result.center_bore else 0.0
+            )
+            max_diameter = (
+                int(specs_result.max_wheel_diameter)
+                if specs_result.max_wheel_diameter
+                else 20
+            )
+            width_range = (
+                str(specs_result.typical_width_range)
+                if specs_result.typical_width_range
+                else "7-9"
+            )
+            offset_range = (
+                str(specs_result.typical_offset_range)
+                if specs_result.typical_offset_range
+                else "+20 to +45"
+            )
+        else:
+            # Fallback if DSPy not available
+            bolt_pattern = "Unknown"
+            center_bore = 0.0
+            max_diameter = 20
+            width_range = "7-9"
+            offset_range = "+20 to +45"
 
         # Build search query and get results
         search_query_parts = [p for p in [make, model] if p]
@@ -1261,9 +908,6 @@ Only recommend Kansei wheels from the KANSEI WHEELS section below."""
 
         if not search_results:
             data_source = "llm_knowledge"
-
-        # Get bolt pattern (year and model-aware)
-        bolt_pattern = self._get_bolt_pattern(make, year, model)
 
         # Build context
         if data_source == "exact":
@@ -1291,10 +935,9 @@ Only recommend Kansei wheels from the KANSEI WHEELS section below."""
             offset_tolerance=15,
         )
 
-        # Build prompt for OpenAI
+        # Build prompt for OpenAI streaming
         vehicle_info = f"{year or ''} {make or ''} {model or ''}".strip()
         year_note = "" if year else " (year not specified - do NOT make up a year)"
-        center_bore = self._get_center_bore(make, year, model)
         center_bore_str = f"{center_bore}mm" if center_bore else "check vehicle specs"
 
         system_prompt = f"""You are a Kansei Wheels sales assistant. Your ONLY job is to recommend Kansei brand wheels.
@@ -1302,8 +945,8 @@ Only recommend Kansei wheels from the KANSEI WHEELS section below."""
 **FORMAT YOUR RESPONSE LIKE THIS:**
 
 **[VEHICLE]{year_note}**
-Bolt Pattern: [pattern]
-Center Bore: [bore]
+Bolt Pattern: {bolt_pattern}
+Center Bore: {center_bore_str}
 
 **VERIFIED COMMUNITY SETUPS:**
 [List wheel/tire specs from the FITMENT DATA provided - these show what sizes work on this vehicle]
@@ -1316,53 +959,25 @@ Center Bore: [bore]
 *Disclaimer: Verify fitment with a professional before purchase.*
 
 CRITICAL RULES - YOU MUST FOLLOW THESE:
-1. ONLY recommend Kansei wheels - NEVER mention competitor brands (JNC, TSW, SSR, Work, Enkei, etc.)
-2. The FITMENT DATA shows community setups - use these specs to understand what sizes fit, but DO NOT recommend the wheel brands in that data
-3. Match Kansei wheels to the specs shown in FITMENT DATA (diameter, width, offset range)
-4. If no Kansei wheels match the bolt pattern, say so clearly
+1. ONLY recommend Kansei wheels - NEVER mention competitor brands
+2. Use the VALIDATED SPECS above - they are accurate for this vehicle
+3. Only recommend wheel sizes up to {max_diameter}" diameter (max for this vehicle)
+4. Typical width range: {width_range}", offset range: {offset_range}
 5. If no year was provided, do NOT make up a year
-6. Never hallucinate Kansei models - only recommend wheels from the KANSEI WHEELS section
-7. Include the Kansei product URL when available"""
+6. Never hallucinate Kansei models - only recommend wheels from the KANSEI WHEELS section"""
 
-        if data_source == "exact":
-            user_content = f"""Query: {query}
+        user_content = f"""Query: {query}
 Vehicle: {vehicle_info}
-Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
 
-FITMENT DATA (community setups - use for reference specs only, DO NOT recommend these wheel brands):
-{context}
-
-{kansei_recommendations}"""
-        elif data_source == "similar":
-            user_content = f"""Query: {query}
-Vehicle: {vehicle_info}
-Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
-
-REFERENCE DATA (from similar vehicles - use for reference specs only, DO NOT recommend these wheel brands):
-{context}
-
-{kansei_recommendations}"""
-        else:
-            user_content = f"""Query: {query}
-Vehicle: {vehicle_info}
-Bolt Pattern: {bolt_pattern}
-Center Bore: {center_bore_str}
-
-No verified fitment data available. Only recommend Kansei wheels from the list below.
+FITMENT DATA:
+{context if context else "(No community fitment records)"}
 
 {kansei_recommendations if kansei_recommendations else "No Kansei wheels match this bolt pattern."}"""
-
-        # Generate unique message ID for Vercel AI SDK protocol
-        import uuid
-
-        message_id = f"msg_{uuid.uuid4().hex}"
 
         # Send start event (Vercel AI SDK protocol)
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
-        # Stream from OpenAI using Vercel AI SDK protocol
+        # Stream from OpenAI
         client = _get_openai_client()
         stream = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -1382,7 +997,6 @@ No verified fitment data available. Only recommend Kansei wheels from the list b
             if chunk.choices[0].delta.content:
                 content = chunk.choices[0].delta.content
                 full_response += content
-                # Yield text-delta event (Vercel AI SDK format)
                 yield f"data: {json.dumps({'type': 'text-delta', 'id': message_id, 'delta': content})}\n\n"
 
         # Append Kansei recommendations if not already included
@@ -1400,23 +1014,31 @@ No verified fitment data available. Only recommend Kansei wheels from the list b
                 year=year,
                 make=make,
                 model=model,
-                trim=parsed.get("trim"),
+                trim=trim,
                 fitment_style=fitment_style,
                 bolt_pattern=bolt_pattern,
                 notes=f"Query: {query}",
             )
 
-        # Send custom data event with metadata (Vercel AI SDK data part)
+        # Send metadata
+        specs = {
+            "bolt_pattern": bolt_pattern,
+            "center_bore": center_bore,
+            "max_wheel_diameter": max_diameter,
+            "typical_width_range": width_range,
+            "typical_offset_range": offset_range,
+        }
         metadata = {
             "sources": search_results,
             "parsed": {
                 "year": year,
                 "make": make,
                 "model": model,
-                "trim": parsed.get("trim"),
+                "trim": trim,
                 "fitment_style": fitment_style,
-                "bolt_pattern": bolt_pattern,
             },
+            "specs": specs,
+            "vehicle_exists": True,
             "data_source": data_source,
             "pending_fitment_id": pending_id,
             "kansei_matches": find_matching_kansei_wheels(bolt_pattern)
