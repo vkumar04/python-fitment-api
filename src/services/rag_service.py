@@ -275,7 +275,7 @@ IMPORTANT NOTES:
         if _dspy_assistant is None and self.use_dspy:
             from .dspy_fitment import create_fitment_assistant
 
-            _dspy_assistant = create_fitment_assistant("openai/gpt-4o-mini")
+            _dspy_assistant = create_fitment_assistant("openai/gpt-4o")
 
     def parse_query(self, query: str) -> dict[str, Any]:
         """Use DSPy to extract year, make, model, and fitment style from natural language."""
@@ -713,7 +713,7 @@ IMPORTANT NOTES:
                 "answer": result.response,
                 "sources": [],
                 "parsed": result.parsed,
-                "specs": None,
+                "specs": {},
                 "vehicle_exists": False,
                 "data_source": "invalid_vehicle",
             }

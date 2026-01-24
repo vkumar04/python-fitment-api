@@ -491,10 +491,13 @@ def _parse_metric(example: dspy.Example, prediction: dspy.Prediction) -> float:
 
 
 def create_fitment_assistant(
-    model: str = "openai/gpt-4o-mini",
+    model: str = "openai/gpt-4o",
     optimize: bool = False,
 ) -> FitmentAssistant:
-    """Create and configure a FitmentAssistant with the specified model."""
+    """Create and configure a FitmentAssistant with the specified model.
+
+    Uses gpt-4o for better accuracy on vehicle specs (bolt patterns, center bore, etc.)
+    """
     lm = dspy.LM(model, max_tokens=512)
     dspy.configure(lm=lm)
 
