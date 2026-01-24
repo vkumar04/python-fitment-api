@@ -240,7 +240,7 @@ class ValidateVehicleSpecs(dspy.Signature):
 
 
 class GenerateFitmentResponse(dspy.Signature):
-    """Generate Kansei wheel recommendations. ONLY recommend Kansei brand wheels."""
+    """Generate conversational Kansei wheel recommendations."""
 
     vehicle_info: str = dspy.InputField(
         desc="Vehicle details with validated specs (bolt pattern, center bore, size limits)"
@@ -251,15 +251,25 @@ class GenerateFitmentResponse(dspy.Signature):
     user_query: str = dspy.InputField()
 
     response: str = dspy.OutputField(
-        desc="""Generate Kansei wheel recommendations following these rules:
+        desc="""Write a friendly, conversational response like you're chatting with a car enthusiast.
 
-1. ONLY recommend Kansei brand wheels - NEVER mention competitor brands
-2. Use the VALIDATED SPECS provided - these are accurate for this specific vehicle
-3. Only recommend wheel sizes within the max_wheel_diameter limit
-4. List specific Kansei wheels from the KANSEI WHEELS section with model, size, offset, price, and URL
-5. If no Kansei wheels match the bolt pattern or size constraints, clearly state that
-6. If no year was provided, do NOT make up a year
-7. Never hallucinate Kansei models that aren't in the provided data"""
+TONE: Casual, helpful, knowledgeable - like talking to a friend who knows wheels.
+
+EXAMPLE GOOD RESPONSE:
+"Nice! The E30 M3 is a classic. You're looking at a 4x100 bolt pattern with a 57.1mm center bore - pretty unique for BMWs since the newer ones went to 5x120.
+
+For your E30, I'd check out the Kansei KNP in 15x8 - it's got that retro mesh look that pairs perfectly with the boxy E30 styling. They run about $275/wheel and the +25 offset should give you a nice flush fit.
+
+If you want to go a bit bigger, the Roku in 17x8 would work too, though 15s or 16s tend to look more period-correct on E30s. What kind of look are you going for?"
+
+RULES:
+- Sound like a human, not a spec sheet
+- Mention 1-3 specific Kansei wheels that fit (from the KANSEI WHEELS data)
+- Include the key specs naturally in conversation (bolt pattern, sizes)
+- Ask a follow-up question when appropriate
+- If no Kansei wheels fit, be honest and helpful about it
+- NEVER mention competitor brands
+- NEVER make up Kansei models - only recommend wheels from the provided data"""
     )
 
 
