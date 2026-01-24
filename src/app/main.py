@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..services.rag_service import RAGService
@@ -52,6 +53,91 @@ async def chat(request: ChatRequest):
     try:
         result = rag_service.ask(query=request.query)
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Streaming chat endpoint - Vercel AI SDK compatible.
+
+    Uses the Vercel AI SDK Data Stream Protocol with SSE format.
+    Set streamProtocol: 'data' in useChat() options.
+
+    Event types:
+    - text-start: Start of text response
+    - text-delta: Incremental text content
+    - text-end: End of text response
+    - data-metadata: Custom data (sources, parsed info, kansei matches)
+    - finish: Stream complete
+
+    Example with Vercel AI SDK (Next.js):
+    ```typescript
+    import { useChat } from 'ai/react';
+
+    export default function Chat() {
+      const { messages, input, handleInputChange, handleSubmit, data } = useChat({
+        api: '/api/chat/stream',
+        streamProtocol: 'data',
+      });
+
+      return (
+        <form onSubmit={handleSubmit}>
+          <input value={input} onChange={handleInputChange} />
+          <button type="submit">Send</button>
+          {messages.map(m => <div key={m.id}>{m.content}</div>)}
+        </form>
+      );
+    }
+    ```
+
+    Example with raw fetch:
+    ```javascript
+    const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: 'What wheels fit a 2020 Honda Civic?' })
+    });
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const text = decoder.decode(value);
+        for (const line of text.split('\\n\\n')) {
+            if (line.startsWith('data: ')) {
+                const event = JSON.parse(line.slice(6));
+                switch (event.type) {
+                    case 'text-delta':
+                        console.log(event.delta); // Append to display
+                        break;
+                    case 'data-metadata':
+                        console.log('Metadata:', event.data);
+                        break;
+                    case 'finish':
+                        console.log('Stream complete');
+                        break;
+                }
+            }
+        }
+    }
+    ```
+    """
+    try:
+        return StreamingResponse(
+            rag_service.ask_streaming(query=request.query),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+                "x-vercel-ai-data-stream": "v1",  # Vercel AI SDK header
+            },
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -1,9 +1,10 @@
 import json
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from anthropic.types import TextBlock
+from openai import OpenAI
 
 from .rag_service import RAGService
 from .wheel_size_lookup import OEMSpecs, get_wheel_size_lookup
@@ -443,22 +444,26 @@ Top matching Kansei wheels:
 
         # Get AI explanation
         try:
-            response = self.rag_service.anthropic.messages.create(
-                model="claude-sonnet-4-20250514",
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            response = client.chat.completions.create(
+                model="gpt-4o",
                 max_tokens=500,
-                system="""You are a wheel fitment expert. Explain the wheel recommendations briefly and clearly.
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """You are a wheel fitment expert. Explain the wheel recommendations briefly and clearly.
 Focus on: why these wheels fit, any concerns, and which option is best for their goals.
 Be concise but helpful. Mention spacers or fender work if needed.""",
-                messages=[
+                    },
                     {
                         "role": "user",
                         "content": f"Explain these wheel recommendations:\n\n{context}",
-                    }
+                    },
                 ],
             )
             explanation = ""
-            if response.content and isinstance(response.content[0], TextBlock):
-                explanation = response.content[0].text
+            if response.choices and response.choices[0].message.content:
+                explanation = response.choices[0].message.content
         except Exception:
             explanation = "Unable to generate AI explanation."
 
