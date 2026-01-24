@@ -822,18 +822,39 @@ IMPORTANT NOTES:
 
         trim = parsed.get("trim")
 
-        # If no vehicle info found, this is likely a greeting or general question
+        # If no vehicle info found, check if it's a follow-up question about fitment
         if not any([year, make, model]):
-            greeting = 'Hey! I\'m here to help you find Kansei wheels for your ride. Just tell me what you\'re driving - like "2020 Honda Civic" or "E30 M3" - and I\'ll hook you up with wheel recommendations that fit. What are you working with?'
+            query_lower = query.lower()
+            fitment_terms = [
+                "staggered",
+                "square",
+                "flush",
+                "aggressive",
+                "tucked",
+                "offset",
+                "wheel",
+                "tire",
+                "fitment",
+                "poke",
+                "spacer",
+            ]
+            is_fitment_followup = any(term in query_lower for term in fitment_terms)
+
+            if is_fitment_followup:
+                # This looks like a follow-up about fitment - ask for vehicle context
+                followup_msg = "I'd love to help with that! But I need to know what vehicle you're working with first. What are you driving?"
+            else:
+                # Generic greeting
+                followup_msg = 'Hey! I\'m here to help you find Kansei wheels for your ride. Just tell me what you\'re driving - like "2020 Honda Civic" or "E30 M3" - and I\'ll hook you up with wheel recommendations that fit. What are you working with?'
 
             yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
             yield f"data: {json.dumps({'type': 'text-start', 'id': message_id})}\n\n"
-            yield f"data: {json.dumps({'type': 'text-delta', 'id': message_id, 'delta': greeting})}\n\n"
+            yield f"data: {json.dumps({'type': 'text-delta', 'id': message_id, 'delta': followup_msg})}\n\n"
             yield f"data: {json.dumps({'type': 'text-end', 'id': message_id})}\n\n"
             yield f"data: {json.dumps({'type': 'finish', 'finishReason': 'stop'})}\n\n"
             yield "data: [DONE]\n\n"
             return {
-                "answer": greeting,
+                "answer": followup_msg,
                 "sources": [],
                 "parsed": parsed,
                 "vehicle_exists": True,
