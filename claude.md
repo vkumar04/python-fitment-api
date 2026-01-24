@@ -92,9 +92,8 @@ The `fitments` table stores community fitment data with full-text search:
 ### Health Check
 - `GET /health` - Check if the API is running
 
-### Query Endpoints
-- `POST /api/ask` - Ask a question about fitments (RAG response with Claude)
-- `POST /api/search` - Search for fitments without AI response
+### Chat Endpoint
+- `POST /api/chat` - Natural language chat endpoint (main endpoint)
 
 ### Data Endpoints
 - `GET /api/makes` - Get all vehicle makes
@@ -106,35 +105,56 @@ The `fitments` table stores community fitment data with full-text search:
 
 ## Request/Response Examples
 
-### Ask Question with Filters
+### Chat (Natural Language)
+The `/api/chat` endpoint accepts natural language queries. Claude NLP extracts vehicle info (year, make, model, fitment style) automatically.
+
 ```json
-POST /api/ask
+POST /api/chat
 {
-  "query": "What aggressive wheel setup works on a Civic?",
-  "year": 2025,
-  "make": "Honda",
-  "model": "Civic Sport",
-  "fitment_setup": "square",
-  "fitment_style": "aggressive",
-  "limit": 5
+  "query": "What flush fitment works on a 2020 BMW M3?"
 }
 ```
 
-### Search for Staggered Setups
+Response:
 ```json
-POST /api/search
 {
-  "query": "19 inch wheels BMW M4",
-  "make": "BMW",
-  "fitment_setup": "staggered",
-  "limit": 10
+  "answer": "Based on the fitment data...",
+  "sources": [
+    {
+      "document": "2023 BMW M3 Competition | Setup: staggered flush...",
+      "metadata": {
+        "year": 2023,
+        "make": "BMW",
+        "model": "M3 Competition",
+        "front_diameter": 20,
+        "front_width": 10,
+        "front_offset": 22,
+        ...
+      },
+      "rank": 0.25948
+    }
+  ]
 }
 ```
+
+### Example Queries
+- "What wheels fit a Honda Civic?"
+- "2020 BMW M3 flush fitment"
+- "FK8 Civic Type R aggressive setup"
+- "Chevy truck aggressive fitment"
+- "E30 M3 flush wheels" (handles chassis codes)
 
 ## Services
 
 ### RAGService
 Core service for searching fitments and generating AI responses using Supabase full-text search and Claude.
+
+Key features:
+- **NLP Query Parsing**: Uses Claude to extract year, make, model, and fitment_style from natural language
+- **Chassis Code Handling**: Recognizes E30, FK8, GD, etc. and extracts actual model names
+- **Nickname Support**: "chevy" → Chevrolet, "bimmer" → BMW
+- **Progressive Fallback**: If exact year not found, drops year filter; if still empty, drops fitment_style
+- **Clean Search Queries**: Builds FTS queries from parsed values to avoid issues with chassis codes/years not in DB
 
 ### WheelMatcher
 Matches vehicles to compatible Kansei wheels based on:
@@ -154,6 +174,31 @@ Scrapes Kansei wheels catalog (457 wheel variants):
 - Street and offroad wheels
 - Extracts specs from SKUs (diameter, width, offset)
 - Saves to JSON for wheel matching
+
+## Railway Deployment
+
+### Environment Variables (set in Railway dashboard)
+```
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_anon_key
+ANTHROPIC_API_KEY=your_anthropic_api_key
+```
+
+### Deploy Steps
+1. Push code to GitHub
+2. Go to [railway.app](https://railway.app) and create new project
+3. Select "Deploy from GitHub repo"
+4. Choose this repository
+5. Add environment variables in Settings → Variables
+6. Railway auto-deploys on push to main
+
+### Files for Railway
+- `railway.toml` - Railway-specific config (health checks, restart policy)
+- `nixpacks.toml` - Build config (Python 3.12, uv package manager)
+- `Procfile` - Start command fallback
+
+### Health Check
+Railway pings `/health` endpoint to verify the service is running.
 
 ## Notes for Development
 

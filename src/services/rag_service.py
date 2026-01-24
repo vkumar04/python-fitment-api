@@ -291,17 +291,36 @@ Important rules:
             model = parsed.get("model") or model
             fitment_style = parsed.get("fitment_style") or fitment_style
 
+        # Build a clean search query from parsed values (avoids FTS issues with chassis codes, etc.)
+        search_query_parts = [p for p in [make, model, fitment_style] if p]
+        search_query = " ".join(search_query_parts) if search_query_parts else query
+
         search_results = self.search(
-            query, year, make, model, fitment_setup, fitment_style, limit
+            search_query, year, make, model, fitment_setup, fitment_style, limit
         )
 
-        # If no results with year filter, try without year (broaden search)
+        # If no results, progressively broaden the search
         original_year = year
+        original_style = fitment_style
+
+        # Try 1: Drop year filter
         if not search_results and year:
             search_results = self.search(
-                query, None, make, model, fitment_setup, fitment_style, limit
+                search_query, None, make, model, fitment_setup, fitment_style, limit
             )
-            year = None  # Mark that we dropped the year filter
+            if search_results:
+                year = None
+
+        # Try 2: Drop fitment_style filter too
+        if not search_results and fitment_style:
+            # Rebuild search query without style
+            search_query = " ".join([p for p in [make, model] if p]) or query
+            search_results = self.search(
+                search_query, None, make, model, fitment_setup, None, limit
+            )
+            if search_results:
+                year = None
+                fitment_style = None
 
         context = "\n\n".join(
             [f"Fitment {i + 1}:\n{r['document']}" for i, r in enumerate(search_results)]
@@ -323,12 +342,14 @@ Terminology:
 - Offset (ET): distance from wheel centerline to mounting surface (mm)
 - Backspacing: distance from back of wheel to mounting surface (inches)"""
 
-        # Build context note about year mismatch
-        year_note = ""
-        if original_year and not year:
-            year_note = f"\nNote: No data found for year {original_year}. Showing results from other years of the same model for reference."
+        # Build context note about search adjustments
+        search_note = ""
+        if original_year and year != original_year:
+            search_note = f"\nNote: No data for year {original_year}. Showing other years of this model."
+        if original_style and fitment_style != original_style:
+            search_note += f"\nNote: Limited '{original_style}' fitment data. Showing all available fitments."
 
-        user_prompt = f"""Based on the following fitment data:{year_note}
+        user_prompt = f"""Based on the following fitment data:{search_note}
 
 {context}
 
