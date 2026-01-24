@@ -22,8 +22,14 @@ app.add_middleware(
 rag_service = RAGService()
 
 
+class Message(BaseModel):
+    role: str  # "user" or "assistant"
+    content: str
+
+
 class ChatRequest(BaseModel):
     query: str
+    messages: list[Message] | None = None  # Conversation history for context
 
 
 class LoadDataRequest(BaseModel):
@@ -128,8 +134,13 @@ async def chat_stream(request: ChatRequest):
     ```
     """
     try:
+        # Convert messages to list of dicts for the service
+        history = None
+        if request.messages:
+            history = [{"role": m.role, "content": m.content} for m in request.messages]
+
         return StreamingResponse(
-            rag_service.ask_streaming(query=request.query),
+            rag_service.ask_streaming(query=request.query, history=history),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

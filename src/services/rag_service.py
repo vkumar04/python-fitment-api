@@ -799,17 +799,47 @@ IMPORTANT NOTES:
         fitment_setup: str | None = None,
         fitment_style: str | None = None,
         limit: int = 10,
+        history: list[dict[str, str]] | None = None,
     ) -> Generator[str, None, dict[str, Any]]:
         """
         Streaming version of ask() - yields SSE events as they come in.
 
         Uses DSPy for vehicle validation and specs lookup (non-streaming),
         then streams the response generation from OpenAI.
+
+        Args:
+            history: List of previous messages [{"role": "user"|"assistant", "content": "..."}]
         """
         global _dspy_assistant
         import uuid
 
         message_id = f"msg_{uuid.uuid4().hex}"
+
+        # Extract vehicle info from conversation history if not in current query
+        history_context = ""
+        if history:
+            # Look through history for vehicle info we can use
+            for msg in history:
+                if msg["role"] == "user":
+                    hist_parsed = self.parse_query(msg["content"])
+                    if hist_parsed.get("make") and not make:
+                        make = hist_parsed.get("make")
+                    if hist_parsed.get("model") and not model:
+                        model = hist_parsed.get("model")
+                    if hist_parsed.get("year") and not year:
+                        year = hist_parsed.get("year")
+                    if hist_parsed.get("trim") and not parsed.get("trim"):
+                        parsed["trim"] = hist_parsed.get("trim")
+                    if hist_parsed.get("fitment_style") and not fitment_style:
+                        fitment_style = hist_parsed.get("fitment_style")
+
+            # Build conversation context for the LLM
+            history_context = "\n".join(
+                [
+                    f"{msg['role'].upper()}: {msg['content']}"
+                    for msg in history[-6:]  # Last 6 messages for context
+                ]
+            )
 
         # Parse query to get vehicle info
         parsed: dict[str, Any] = {}
@@ -1014,14 +1044,22 @@ FITMENT DATA:
         # Send start event (Vercel AI SDK protocol)
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
+        # Build messages list with conversation history
+        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history if available
+        if history:
+            for msg in history[-6:]:  # Last 6 messages for context
+                messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Add current query with context
+        messages.append({"role": "user", "content": user_content})
+
         # Stream from OpenAI
         client = _get_openai_client()
         stream = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
+            messages=messages,
             max_tokens=512,
             stream=True,
         )
