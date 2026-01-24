@@ -1,3 +1,161 @@
 {
-  "2024_mazda_mx-5": null
+  "2024_mazda_mx-5": null,
+  "2020_honda_civic": {
+    "year": 2020,
+    "make": "Honda",
+    "model": "Civic",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 43,
+    "oem_offset_max": 52,
+    "oem_wheel_sizes": [
+      "16x7",
+      "17x7",
+      "18x8"
+    ],
+    "oem_tire_sizes": [
+      "215/55R16",
+      "215/50R17",
+      "235/40ZR18"
+    ],
+    "stud_size": ""
+  },
+  "2019_bmw_m3": null,
+  "1984_bmw_m6": null,
+  "2018_ford_mustang": {
+    "year": 2018,
+    "make": "Ford",
+    "model": "Mustang",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 37,
+    "oem_offset_max": 52,
+    "oem_wheel_sizes": [
+      "17x7.5",
+      "18x8",
+      "19x8.5",
+      "19x9",
+      "20x9"
+    ],
+    "oem_tire_sizes": [
+      "235/55R17",
+      "235/50ZR18",
+      "255/40ZR19",
+      "265/35ZR20",
+      "275/40ZR19"
+    ],
+    "stud_size": ""
+  },
+  "2022_toyota_gr86": {
+    "year": 2022,
+    "make": "Toyota",
+    "model": "GR86",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 46,
+    "oem_offset_max": 50,
+    "oem_wheel_sizes": [
+      "17x7.5",
+      "18x7.5",
+      "17x7"
+    ],
+    "oem_tire_sizes": [
+      "215/45ZR17",
+      "215/40ZR18"
+    ],
+    "stud_size": ""
+  },
+  "2021_subaru_wrx": {
+    "year": 2021,
+    "make": "Subaru",
+    "model": "WRX",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 53,
+    "oem_offset_max": 57,
+    "oem_wheel_sizes": [
+      "18x8.5",
+      "19x8.5",
+      "17x8"
+    ],
+    "oem_tire_sizes": [
+      "245/40ZR18",
+      "245/35ZR19",
+      "235/45ZR17"
+    ],
+    "stud_size": ""
+  },
+  "1990_mazda_miata": null,
+  "2023_bmw_m4": {
+    "year": 2023,
+    "make": "BMW",
+    "model": "M4",
+    "bolt_pattern": "5X120",
+    "center_bore": 0.0,
+    "oem_offset_min": 20,
+    "oem_offset_max": 20,
+    "oem_wheel_sizes": [
+      "18x9.5",
+      "19x5",
+      "19x9",
+      "19x9.5",
+      "20x5"
+    ],
+    "oem_tire_sizes": [
+      "275/40ZR18",
+      "285/35ZR19",
+      "275/35R19",
+      "275/35ZR19",
+      "285/30ZR20"
+    ],
+    "stud_size": ""
+  },
+  "2014_subaru_brz": {
+    "year": 2014,
+    "make": "Subaru",
+    "model": "BRZ",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 43,
+    "oem_offset_max": 50,
+    "oem_wheel_sizes": [
+      "17x7",
+      "17x7.5",
+      "18x7.5",
+      "19x7.5"
+    ],
+    "oem_tire_sizes": [
+      "215/45ZR17",
+      "215/40ZR18",
+      "225/40ZR18",
+      "215/35ZR19",
+      "235/30ZR19"
+    ],
+    "stud_size": ""
+  },
+  "2020_tesla_model_3": {
+    "year": 2020,
+    "make": "Tesla",
+    "model": "Model 3",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 32,
+    "oem_offset_max": 42,
+    "oem_wheel_sizes": [
+      "18x8.5",
+      "19x8.5",
+      "19x5",
+      "20x8.5",
+      "20x9"
+    ],
+    "oem_tire_sizes": [
+      "235/45ZR18",
+      "235/40ZR19",
+      "275/35ZR19",
+      "235/35ZR20",
+      "275/30ZR20"
+    ],
+    "stud_size": ""
+  },
+  "2023_bmw_m4_g82": null
 }
