@@ -6,7 +6,7 @@ from typing import Any
 
 from openai import OpenAI
 
-from .rag_service import RAGService
+from ..db import fitments as db
 from .wheel_size_lookup import OEMSpecs, get_wheel_size_lookup
 
 
@@ -92,7 +92,6 @@ class WheelMatcher:
     }
 
     def __init__(self, kansei_data_path: str = "datafiles/kansei_wheels.json") -> None:
-        self.rag_service = RAGService()
         self.kansei_wheels = self._load_kansei_wheels(kansei_data_path)
         self.wheel_size_lookup = get_wheel_size_lookup()
 
@@ -119,7 +118,7 @@ class WheelMatcher:
             StanceType.AGGRESSIVE: "aggressive",
         }
 
-        results = self.rag_service.search(
+        results = db.search(
             query=query,
             year=config.year,
             make=config.make,
