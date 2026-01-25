@@ -650,7 +650,9 @@ IMPORTANT NOTES:
             model = parsed.get("model") or model
             fitment_style = parsed.get("fitment_style") or fitment_style
 
-        trim = parsed.get("trim")
+        # Get trim from parsed if not already set from history
+        if not trim:
+            trim = parsed.get("trim")
 
         # Build search query and get results from database
         search_query_parts = [p for p in [make, model] if p]
@@ -815,10 +817,12 @@ IMPORTANT NOTES:
 
         message_id = f"msg_{uuid.uuid4().hex}"
 
+        # Initialize parsed dict early so history extraction can use it
+        parsed: dict[str, Any] = {}
+        trim = None
+
         # Extract vehicle info from conversation history if not in current query
-        history_context = ""
         if history:
-            # Look through history for vehicle info we can use
             for msg in history:
                 if msg["role"] == "user":
                     hist_parsed = self.parse_query(msg["content"])
@@ -828,29 +832,19 @@ IMPORTANT NOTES:
                         model = hist_parsed.get("model")
                     if hist_parsed.get("year") and not year:
                         year = hist_parsed.get("year")
-                    if hist_parsed.get("trim") and not parsed.get("trim"):
-                        parsed["trim"] = hist_parsed.get("trim")
+                    if hist_parsed.get("trim") and not trim:
+                        trim = hist_parsed.get("trim")
                     if hist_parsed.get("fitment_style") and not fitment_style:
                         fitment_style = hist_parsed.get("fitment_style")
 
-            # Build conversation context for the LLM
-            history_context = "\n".join(
-                [
-                    f"{msg['role'].upper()}: {msg['content']}"
-                    for msg in history[-6:]  # Last 6 messages for context
-                ]
-            )
-
-        # Parse query to get vehicle info
-        parsed: dict[str, Any] = {}
-        if not any([year, make, model, fitment_style]):
-            parsed = self.parse_query(query)
-            year = parsed.get("year") or year
-            make = parsed.get("make") or make
-            model = parsed.get("model") or model
-            fitment_style = parsed.get("fitment_style") or fitment_style
-
-        trim = parsed.get("trim")
+        # Parse current query to get additional vehicle info
+        current_parsed = self.parse_query(query)
+        year = current_parsed.get("year") or year
+        make = current_parsed.get("make") or make
+        model = current_parsed.get("model") or model
+        fitment_style = current_parsed.get("fitment_style") or fitment_style
+        if not trim:
+            trim = current_parsed.get("trim")
 
         # If no vehicle info found, check if it's a follow-up question about fitment
         if not any([year, make, model]):
@@ -886,7 +880,13 @@ IMPORTANT NOTES:
             return {
                 "answer": followup_msg,
                 "sources": [],
-                "parsed": parsed,
+                "parsed": {
+                    "year": year,
+                    "make": make,
+                    "model": model,
+                    "trim": trim,
+                    "fitment_style": fitment_style,
+                },
                 "vehicle_exists": True,
                 "data_source": "greeting",
             }
@@ -918,7 +918,13 @@ IMPORTANT NOTES:
                 return {
                     "answer": error_msg,
                     "sources": [],
-                    "parsed": parsed,
+                    "parsed": {
+                        "year": year,
+                        "make": make,
+                        "model": model,
+                        "trim": trim,
+                        "fitment_style": fitment_style,
+                    },
                     "vehicle_exists": False,
                     "data_source": "invalid_vehicle",
                 }
