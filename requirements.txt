@@ -201,6 +201,8 @@ pydantic==2.12.5
     #   supabase-auth
 pydantic-core==2.41.5
     # via pydantic
+pydantic-settings==2.0.0
+    # via python-rag (pyproject.toml)
 pygments==2.19.2
     # via rich
 pyiceberg==0.10.0
