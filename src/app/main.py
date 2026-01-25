@@ -42,33 +42,6 @@ async def health_check():
 
 
 @app.post("/api/chat")
-async def chat(request: ChatRequest):
-    """
-    Chat endpoint - just send a query in natural language.
-
-    The API will:
-    1. Use NLP to extract year, make, model, fitment style from your query
-    2. Search the fitment database with those filters
-    3. Return an AI-generated answer based on the data
-
-    Examples:
-    - "What wheels fit a 2020 Honda Civic for a flush look?"
-    - "I have a 2018 BMW M3, looking for aggressive fitment"
-    - "Best setup for a Chevy Camaro SS?"
-    """
-    try:
-        # Convert messages to list of dicts for the service
-        history = None
-        if request.messages:
-            history = [{"role": m.role, "content": m.content} for m in request.messages]
-
-        result = rag_service.ask(query=request.query, history=history)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
     """
     Streaming chat endpoint - Vercel AI SDK compatible.
