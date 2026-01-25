@@ -645,12 +645,20 @@ IMPORTANT NOTES:
                 "data_source": "error",
             }
 
-        # Initialize trim
-        trim = None
+        # Parse current query FIRST - current query always takes precedence
+        current_parsed = self.parse_query(query)
+        year = current_parsed.get("year") or year
+        make = current_parsed.get("make") or make
+        model = current_parsed.get("model") or model
+        trim = current_parsed.get("trim")
+        fitment_style = current_parsed.get("fitment_style") or fitment_style
 
-        # Extract vehicle info from conversation history if not in current query
-        if history:
-            for msg in history:
+        # Only fall back to history if current query didn't specify vehicle info
+        # This ensures a new vehicle query completely overrides the previous context
+        if history and not any(
+            [current_parsed.get("make"), current_parsed.get("model")]
+        ):
+            for msg in reversed(history):  # Most recent first
                 if msg["role"] == "user":
                     hist_parsed = self.parse_query(msg["content"])
                     if hist_parsed.get("make") and not make:
@@ -663,15 +671,9 @@ IMPORTANT NOTES:
                         trim = hist_parsed.get("trim")
                     if hist_parsed.get("fitment_style") and not fitment_style:
                         fitment_style = hist_parsed.get("fitment_style")
-
-        # Parse current query to get additional vehicle info
-        current_parsed = self.parse_query(query)
-        year = current_parsed.get("year") or year
-        make = current_parsed.get("make") or make
-        model = current_parsed.get("model") or model
-        fitment_style = current_parsed.get("fitment_style") or fitment_style
-        if not trim:
-            trim = current_parsed.get("trim")
+                    # Stop once we have vehicle info from history
+                    if make and model:
+                        break
 
         # If no vehicle info found, return a friendly greeting
         if not any([year, make, model]):
@@ -873,12 +875,20 @@ IMPORTANT NOTES:
 
         message_id = f"msg_{uuid.uuid4().hex}"
 
-        # Initialize trim early so history extraction can use it
-        trim = None
+        # Parse current query FIRST - current query always takes precedence
+        current_parsed = self.parse_query(query)
+        year = current_parsed.get("year") or year
+        make = current_parsed.get("make") or make
+        model = current_parsed.get("model") or model
+        trim = current_parsed.get("trim")
+        fitment_style = current_parsed.get("fitment_style") or fitment_style
 
-        # Extract vehicle info from conversation history if not in current query
-        if history:
-            for msg in history:
+        # Only fall back to history if current query didn't specify vehicle info
+        # This ensures a new vehicle query completely overrides the previous context
+        if history and not any(
+            [current_parsed.get("make"), current_parsed.get("model")]
+        ):
+            for msg in reversed(history):  # Most recent first
                 if msg["role"] == "user":
                     hist_parsed = self.parse_query(msg["content"])
                     if hist_parsed.get("make") and not make:
@@ -891,15 +901,9 @@ IMPORTANT NOTES:
                         trim = hist_parsed.get("trim")
                     if hist_parsed.get("fitment_style") and not fitment_style:
                         fitment_style = hist_parsed.get("fitment_style")
-
-        # Parse current query to get additional vehicle info
-        current_parsed = self.parse_query(query)
-        year = current_parsed.get("year") or year
-        make = current_parsed.get("make") or make
-        model = current_parsed.get("model") or model
-        fitment_style = current_parsed.get("fitment_style") or fitment_style
-        if not trim:
-            trim = current_parsed.get("trim")
+                    # Stop once we have vehicle info from history
+                    if make and model:
+                        break
 
         # If no vehicle info found, check if it's a follow-up question about fitment
         if not any([year, make, model]):
