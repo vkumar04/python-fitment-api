@@ -32,7 +32,12 @@ def parse_query(query: str) -> dict[str, Any]:
                 if val is None or val == "None":
                     return None
                 if isinstance(val, str):
-                    return val.strip("\"'")
+                    # Strip quotes and any DSPy metadata/notes
+                    cleaned = val.strip("\"'")
+                    # Remove any DSPy schema notes (e.g., "# note: ...")
+                    if "#" in cleaned:
+                        cleaned = cleaned.split("#")[0].strip()
+                    return cleaned if cleaned else None
                 return str(val)
 
             result = {
@@ -41,6 +46,7 @@ def parse_query(query: str) -> dict[str, Any]:
                 "model": clean_str(parsed.model),
                 "trim": clean_str(parsed.trim),
                 "fitment_style": clean_str(parsed.fitment_style),
+                "suspension": clean_str(getattr(parsed, "suspension", None)),
             }
             _query_cache[cache_key] = result
             return result
@@ -53,6 +59,7 @@ def parse_query(query: str) -> dict[str, Any]:
         "model": None,
         "trim": None,
         "fitment_style": None,
+        "suspension": None,
     }
 
 
@@ -63,6 +70,7 @@ def parse_vehicle_context(
     make: str | None = None,
     model: str | None = None,
     fitment_style: str | None = None,
+    suspension: str | None = None,
 ) -> dict[str, Any]:
     """Parse vehicle info from current query, falling back to history if needed."""
     current_parsed = parse_query(query)
@@ -71,6 +79,7 @@ def parse_vehicle_context(
     model = current_parsed.get("model") or model
     trim = current_parsed.get("trim")
     fitment_style = current_parsed.get("fitment_style") or fitment_style
+    suspension = current_parsed.get("suspension") or suspension
 
     # Only use history if current query doesn't specify vehicle
     if history and not any([current_parsed.get("make"), current_parsed.get("model")]):
@@ -87,6 +96,8 @@ def parse_vehicle_context(
                     trim = hist_parsed.get("trim")
                 if hist_parsed.get("fitment_style") and not fitment_style:
                     fitment_style = hist_parsed.get("fitment_style")
+                if hist_parsed.get("suspension") and not suspension:
+                    suspension = hist_parsed.get("suspension")
                 if make and model:
                     break
 
@@ -96,6 +107,7 @@ def parse_vehicle_context(
         "model": model,
         "trim": trim,
         "fitment_style": fitment_style,
+        "suspension": suspension,
     }
 
 

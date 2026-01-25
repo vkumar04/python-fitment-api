@@ -107,6 +107,7 @@ class RAGService:
             parsed["model"],
             fitment_setup,
             parsed["fitment_style"],
+            parsed.get("suspension"),
             limit,
         )
 
@@ -185,6 +186,7 @@ class RAGService:
         model: str | None,
         fitment_setup: str | None,
         fitment_style: str | None,
+        suspension: str | None,
         limit: int,
     ) -> tuple[list[dict[str, Any]], str]:
         """Search for fitments with progressive fallback."""
@@ -209,6 +211,10 @@ class RAGService:
         # Fallback 3: LLM knowledge only
         if not search_results:
             data_source = "llm_knowledge"
+
+        # Filter/prioritize by suspension if specified
+        if suspension and search_results:
+            search_results = db.filter_by_suspension(search_results, suspension)
 
         return search_results, data_source
 

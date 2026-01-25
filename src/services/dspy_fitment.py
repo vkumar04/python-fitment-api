@@ -165,6 +165,13 @@ class ParseVehicleQuery(dspy.Signature):
     - "e30 m5" = make=BMW, model=M5, trim=E30 (NOT model="5 Series")
     - "e39 m5" = make=BMW, model=M5, trim=E39
     - "e30 m3" = make=BMW, model=M3, trim=E30
+
+    SUSPENSION KEYWORDS:
+    - "lowered", "lowering springs", "dropped" = lowered
+    - "coilovers", "coils", "slammed" = coilovers
+    - "air ride", "air suspension", "bagged" = air
+    - "stock", "factory", "oem height" = stock
+    - "lifted", "leveled", "raised" = lifted (trucks)
     """
 
     query: str = dspy.InputField()
@@ -179,6 +186,9 @@ class ParseVehicleQuery(dspy.Signature):
     )
     fitment_style: str | None = dspy.OutputField(
         desc="aggressive, flush, tucked, or None"
+    )
+    suspension: str | None = dspy.OutputField(
+        desc="stock, lowered, coilovers, air, lifted, or None if not mentioned"
     )
 
 

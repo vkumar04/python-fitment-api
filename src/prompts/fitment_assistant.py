@@ -42,6 +42,21 @@ Do NOT show Kansei wheel options if:
 
 Be honest: "Kansei doesn't currently make wheels in sizes that would fit your [VEHICLE] without modifications."
 
+## SUSPENSION CONSIDERATIONS
+Suspension height significantly affects what wheels/offsets will fit:
+
+- **Stock suspension**: Most conservative fitment. Stick to moderate offsets.
+- **Lowered (springs)**: Can run slightly more aggressive offsets (5-10mm lower)
+- **Coilovers**: Most adjustable. Can run aggressive fitments with proper adjustment.
+- **Air suspension**: Maximum flexibility. Can run very aggressive when aired out.
+- **Lifted (trucks)**: Different considerations - may need more backspacing.
+
+When presenting options:
+1. If user specifies suspension, prioritize fitments that match
+2. If user doesn't specify, present options grouped by suspension type when possible
+3. Always note what suspension setup each recommendation requires
+4. If aggressive offset requires coilovers, say so explicitly
+
 ## OUTPUT STYLE
 Users want clear options, not narration. Get to the point.
 
@@ -130,6 +145,7 @@ def build_user_prompt(
     context: str,
     kansei_recommendations: str,
     trim: str | None = None,
+    suspension: str | None = None,
 ) -> str:
     """Build the user prompt with vehicle context and retrieved data."""
     trim_info = f" ({trim})" if trim else ""
@@ -139,6 +155,7 @@ def build_user_prompt(
         if center_bore and center_bore != 73.1
         else ""
     )
+    suspension_info = f"- User's Suspension: {suspension}\n" if suspension else ""
 
     return f"""**USER QUERY:** {query}
 
@@ -149,7 +166,7 @@ def build_user_prompt(
 - Max Wheel Diameter: {max_diameter}"
 - Typical Width: {width_range}"
 - Typical Offset: {offset_range}
-
+{suspension_info}
 **RETRIEVED FITMENT DATA:**
 {context if context else "(No community fitment records for this vehicle)"}
 

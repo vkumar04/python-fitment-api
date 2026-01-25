@@ -110,6 +110,7 @@ def stream_llm_response(
         context=context,
         kansei_recommendations=kansei_recs,
         trim=parsed.get("trim"),
+        suspension=parsed.get("suspension"),
     )
 
     yield _emit_event("start", {"messageId": message_id})

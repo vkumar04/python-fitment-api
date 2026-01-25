@@ -221,12 +221,20 @@ def _fitment_columns() -> str:
     return (
         "year, make, model, document, front_diameter, front_width, front_offset, "
         "rear_diameter, rear_width, rear_offset, fitment_setup, fitment_style, "
-        "has_poke, needs_mods"
+        "has_poke, needs_mods, notes"
     )
 
 
 def _format_fitment_result(row: dict[str, Any]) -> dict[str, Any]:
     """Format a fitment row into standard result format."""
+    # Extract suspension type from notes field (format: "Suspension: <type>")
+    notes = row.get("notes", "") or ""
+    suspension_type = None
+    if "Suspension:" in notes:
+        parts = notes.split("Suspension:")
+        if len(parts) > 1:
+            suspension_type = parts[1].strip()
+
     return {
         "document": row.get("document", ""),
         "metadata": {
@@ -243,6 +251,7 @@ def _format_fitment_result(row: dict[str, Any]) -> dict[str, Any]:
             "fitment_style": row.get("fitment_style"),
             "has_poke": row.get("has_poke"),
             "needs_modifications": row.get("needs_mods"),
+            "suspension_type": suspension_type,
         },
         "rank": row.get("rank", 0),
     }
@@ -254,6 +263,50 @@ def _format_similar_result(row: dict[str, Any], reason: str) -> dict[str, Any]:
     result["is_similar"] = True
     result["similarity_reason"] = reason
     return result
+
+
+# Mapping from user suspension terms to database values
+SUSPENSION_MAPPING: dict[str, list[str]] = {
+    "stock": ["Stock Suspension", "stock", "Stock"],
+    "lowered": ["Lowering Springs", "lowering springs", "Lowered"],
+    "coilovers": ["Coilovers", "coilovers", "Coils"],
+    "air": ["Air Suspension", "air suspension", "Air Ride", "Bagged"],
+    "lifted": ["Lift Kit", "Leveling Kit", "lifted", "Lifted"],
+}
+
+
+def filter_by_suspension(
+    results: list[dict[str, Any]],
+    suspension: str | None,
+) -> list[dict[str, Any]]:
+    """Filter and prioritize results by suspension type.
+
+    If suspension is specified:
+    - First: exact matches for that suspension
+    - Then: other results (user might want to see what's possible)
+
+    If suspension is None, return results as-is.
+    """
+    if not suspension or not results:
+        return results
+
+    # Normalize suspension type
+    suspension_lower = suspension.lower()
+    matching_values = SUSPENSION_MAPPING.get(suspension_lower, [suspension])
+
+    # Separate matching and non-matching
+    matching = []
+    other = []
+
+    for result in results:
+        susp_type = result.get("metadata", {}).get("suspension_type", "") or ""
+        if any(val.lower() in susp_type.lower() for val in matching_values):
+            matching.append(result)
+        else:
+            other.append(result)
+
+    # Return matching first, then others
+    return matching + other
 
 
 def _csv_row_to_record(row: dict[str, Any]) -> dict[str, Any]:
