@@ -1,10 +1,9 @@
 """Vehicle context parsing from queries and conversation history."""
 
-import hashlib
+from functools import lru_cache
 from typing import Any
 
-# Simple in-memory cache for parsed queries
-_query_cache: dict[str, dict[str, Any]] = {}
+from ..core.logging import log_error
 
 # DSPy assistant (lazy loaded externally)
 _dspy_assistant: Any = None
@@ -16,51 +15,66 @@ def set_dspy_assistant(assistant: Any) -> None:
     _dspy_assistant = assistant
 
 
-def parse_query(query: str) -> dict[str, Any]:
-    """Extract vehicle info from a natural language query using DSPy."""
+@lru_cache(maxsize=1000)
+def _cached_parse(
+    query_normalized: str,
+) -> tuple[
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+]:
+    """Cache-wrapped parsing function. Returns tuple for hashability."""
     global _dspy_assistant
-
-    cache_key = hashlib.md5(query.lower().strip().encode()).hexdigest()
-    if cache_key in _query_cache:
-        return _query_cache[cache_key]
 
     if _dspy_assistant:
         try:
-            parsed = _dspy_assistant.parse_query(query=query)
+            parsed = _dspy_assistant.parse_query(query=query_normalized)
 
             def clean_str(val: Any) -> str | None:
                 if val is None or val == "None":
                     return None
                 if isinstance(val, str):
-                    # Strip quotes and any DSPy metadata/notes
                     cleaned = val.strip("\"'")
-                    # Remove any DSPy schema notes (e.g., "# note: ...")
                     if "#" in cleaned:
                         cleaned = cleaned.split("#")[0].strip()
                     return cleaned if cleaned else None
                 return str(val)
 
-            result = {
-                "year": parsed.year if parsed.year and parsed.year != "None" else None,
-                "make": clean_str(parsed.make),
-                "model": clean_str(parsed.model),
-                "trim": clean_str(parsed.trim),
-                "fitment_style": clean_str(parsed.fitment_style),
-                "suspension": clean_str(getattr(parsed, "suspension", None)),
-            }
-            _query_cache[cache_key] = result
-            return result
-        except Exception:
-            pass
+            return (
+                parsed.year if parsed.year and parsed.year != "None" else None,
+                clean_str(parsed.make),
+                clean_str(parsed.model),
+                clean_str(parsed.trim),
+                clean_str(parsed.fitment_style),
+                clean_str(getattr(parsed, "suspension", None)),
+            )
+        except Exception as e:
+            log_error("DSPy parsing failed", e)
+
+    return (None, None, None, None, None, None)
+
+
+def parse_query(query: str) -> dict[str, Any]:
+    """Extract vehicle info from a natural language query using DSPy."""
+    query_normalized = query.lower().strip()
+    cached = _cached_parse(query_normalized)
 
     return {
-        "year": None,
-        "make": None,
-        "model": None,
-        "trim": None,
-        "fitment_style": None,
-        "suspension": None,
+        "year": cached[0],
+        "make": cached[1],
+        "model": cached[2],
+        "trim": cached[3],
+        "fitment_style": cached[4],
+        "suspension": cached[5],
     }
+
+
+def clear_query_cache() -> None:
+    """Clear the query parsing cache."""
+    _cached_parse.cache_clear()
 
 
 def parse_vehicle_context(

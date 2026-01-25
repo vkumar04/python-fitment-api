@@ -118,7 +118,7 @@ class WheelMatcher:
             StanceType.AGGRESSIVE: "aggressive",
         }
 
-        results = db.search(
+        results = db.search_sync(
             query=query,
             year=config.year,
             make=config.make,

@@ -98,7 +98,22 @@ def _match_to_fitment_data(
     fitment_data: list[dict[str, Any]],
     all_wheels: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Find wheels that match community fitment data specs."""
+    """Find wheels that match community fitment data specs.
+
+    Uses indexed lookup instead of nested loops for O(n) instead of O(n*m).
+    """
+    # Build index of wheels by (diameter, width) for fast lookup
+    # Key: (diameter rounded to int, width rounded to 0.5)
+    wheel_index: dict[tuple[int, float], list[dict[str, Any]]] = {}
+
+    for wheel in all_wheels:
+        d = int(wheel.get("diameter", 0))
+        w = round(wheel.get("width", 0) * 2) / 2  # Round to nearest 0.5
+        key = (d, w)
+        if key not in wheel_index:
+            wheel_index[key] = []
+        wheel_index[key].append(wheel)
+
     matches: dict[str, dict[str, Any]] = {}
 
     for spec in fitment_data:
@@ -110,21 +125,22 @@ def _match_to_fitment_data(
         if not front_diameter or not front_width:
             continue
 
-        # Find wheels close to this spec
-        for wheel in all_wheels:
-            w_diameter = wheel.get("diameter", 0)
-            w_width = wheel.get("width", 0)
-            w_offset = wheel.get("wheel_offset", 0)
+        # Look up wheels at this diameter/width (and adjacent sizes)
+        d_int = int(front_diameter)
+        w_rounded = round(front_width * 2) / 2
 
-            # Match within tolerance
-            if (
-                abs(w_diameter - front_diameter) < 0.5
-                and abs(w_width - front_width) <= 0.5
-                and abs(w_offset - front_offset) <= 15
-            ):
-                key = f"{wheel['model']}-{w_diameter}-{w_width}-{w_offset}"
-                if key not in matches:
-                    matches[key] = wheel
+        # Check exact match and adjacent width sizes
+        for w_check in [w_rounded - 0.5, w_rounded, w_rounded + 0.5]:
+            candidate_wheels = wheel_index.get((d_int, w_check), [])
+
+            for wheel in candidate_wheels:
+                w_offset = wheel.get("wheel_offset", 0)
+
+                # Only need to check offset tolerance now
+                if abs(w_offset - front_offset) <= 15:
+                    key = f"{wheel['model']}-{d_int}-{wheel.get('width', 0)}-{w_offset}"
+                    if key not in matches:
+                        matches[key] = wheel
 
     return list(matches.values())
 
