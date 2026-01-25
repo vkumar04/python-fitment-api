@@ -184,7 +184,8 @@ def format_recommendations(
             if len(size_links) >= 4:
                 break
 
-        price = min(w.get("price", 0) for w in wheels if w.get("price", 0) > 0) or 0
+        prices = [w.get("price", 0) for w in wheels if w.get("price", 0) > 0]
+        price = min(prices) if prices else 0
         lines.append(
             f"- **{model_name}**: {', '.join(size_links)} (from ${price:.0f}/wheel)"
         )

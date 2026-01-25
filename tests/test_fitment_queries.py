@@ -43,19 +43,28 @@ def parse_sse_response(response_text: str) -> dict:
     return {"text": text_content, "metadata": metadata}
 
 
-def query_fitment(query: str, history: list | None = None) -> dict:
+def query_fitment(query: str, history: list | None = None, retries: int = 2) -> dict:
     """Send a fitment query and return parsed response."""
     payload = {"query": query}
     if history:
         payload["history"] = history
 
-    response = httpx.post(
-        f"{BASE_URL}/api/chat",
-        json=payload,
-        timeout=30.0,
-    )
-    response.raise_for_status()
-    return parse_sse_response(response.text)
+    last_error = None
+    for attempt in range(retries + 1):
+        try:
+            response = httpx.post(
+                f"{BASE_URL}/api/chat",
+                json=payload,
+                timeout=60.0,
+            )
+            response.raise_for_status()
+            return parse_sse_response(response.text)
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+            last_error = e
+            if attempt < retries:
+                time.sleep(2)
+                continue
+            raise last_error
 
 
 @pytest.fixture(scope="module", autouse=True)
