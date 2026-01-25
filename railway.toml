@@ -5,6 +5,3 @@ builder = "nixpacks"
 startCommand = "python run.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
-
-[service]
-port = 8000
