@@ -68,6 +68,24 @@ def stream_error(
     }
 
 
+def stream_year_clarification(
+    message_id: str,
+    clarification_msg: str,
+    parsed: dict[str, Any],
+) -> Generator[str, None, dict[str, Any]]:
+    """Stream a year clarification request."""
+    yield from _emit_simple_response(message_id, clarification_msg)
+
+    return {
+        "answer": clarification_msg,
+        "sources": [],
+        "parsed": parsed,
+        "vehicle_exists": True,
+        "needs_year": True,
+        "data_source": "clarification",
+    }
+
+
 def stream_llm_response(
     message_id: str,
     query: str,

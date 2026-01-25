@@ -15,9 +15,10 @@ from ..chat.streaming import (
     stream_error,
     stream_greeting,
     stream_llm_response,
+    stream_year_clarification,
 )
 from ..db import fitments as db
-from .kansei import find_matching_wheels, format_recommendations
+from .kansei import format_recommendations
 
 
 class RAGService:
@@ -90,6 +91,14 @@ class RAGService:
                 yield from stream_error(message_id, specs["invalid_reason"], parsed)
             )
 
+        # Check if we need year clarification
+        if specs.get("needs_year"):
+            return (
+                yield from stream_year_clarification(
+                    message_id, specs["year_clarification"], parsed
+                )
+            )
+
         # Search for fitment data
         search_results, data_source = self._search_fitments(
             query,
@@ -101,11 +110,17 @@ class RAGService:
             limit,
         )
 
-        # Get Kansei recommendations
+        # Get Kansei recommendations validated against vehicle specs
+        vehicle_specs = {
+            "max_diameter": specs["max_diameter"],
+            "min_diameter": specs.get("min_diameter", 15),
+            "width_range": specs["width_range"],
+            "offset_range": specs["offset_range"],
+        }
         kansei_recs = format_recommendations(
             bolt_pattern=specs["bolt_pattern"],
-            fitment_specs=search_results,
-            offset_tolerance=15,
+            vehicle_specs=vehicle_specs,
+            fitment_data=search_results,
         )
 
         # Build context and stream response
@@ -151,9 +166,6 @@ class RAGService:
             "vehicle_exists": True,
             "data_source": data_source,
             "pending_fitment_id": pending_id,
-            "kansei_matches": find_matching_wheels(specs["bolt_pattern"])
-            if specs["bolt_pattern"] != "Unknown"
-            else [],
         }
 
         yield emit_metadata(metadata)
