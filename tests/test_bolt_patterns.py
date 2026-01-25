@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Test 50 vehicles with validated bolt patterns."""
 
-from src.services.rag_service import RAGService
+from src.chat.context import set_dspy_assistant, validate_vehicle_specs
+from src.services.dspy_fitment import create_fitment_assistant
 
 # 50 vehicles with known correct bolt patterns
 VEHICLES = [
@@ -71,7 +72,9 @@ VEHICLES = [
 
 
 def main():
-    svc = RAGService(use_dspy=False)
+    # Initialize DSPy assistant for vehicle validation
+    assistant = create_fitment_assistant("openai/gpt-4o")
+    set_dspy_assistant(assistant)
 
     passed = 0
     failed = 0
@@ -81,7 +84,8 @@ def main():
     print("=" * 70)
 
     for make, year, model, expected in VEHICLES:
-        result = svc._get_bolt_pattern(make, year, model)
+        specs = validate_vehicle_specs(year, make, model, trim=None)
+        result = specs.get("bolt_pattern", "Unknown")
         match = result.upper() == expected.upper()
 
         if match:

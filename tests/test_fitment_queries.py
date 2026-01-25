@@ -11,9 +11,11 @@ Tests cover:
 8. Context switching between vehicles
 """
 
+import json
 import os
 import re
 import time
+from typing import Any
 
 import httpx
 import pytest
@@ -21,10 +23,10 @@ import pytest
 BASE_URL = "http://localhost:8000"
 
 
-def parse_sse_response(response_text: str) -> dict:
+def parse_sse_response(response_text: str) -> dict[str, Any]:
     """Parse SSE response into structured data."""
     text_content = ""
-    metadata = None
+    metadata: dict[str, Any] | None = None
 
     for line in response_text.split("\n"):
         if not line.startswith("data: "):
@@ -34,8 +36,6 @@ def parse_sse_response(response_text: str) -> dict:
             continue
 
         try:
-            import json
-
             parsed = json.loads(data)
             if parsed.get("type") == "text-delta":
                 text_content += parsed.get("delta", "")
@@ -47,13 +47,15 @@ def parse_sse_response(response_text: str) -> dict:
     return {"text": text_content, "metadata": metadata}
 
 
-def query_fitment(query: str, history: list | None = None, retries: int = 2) -> dict:
+def query_fitment(
+    query: str, history: list[dict[str, str]] | None = None, retries: int = 2
+) -> dict[str, Any]:
     """Send a fitment query and return parsed response."""
-    payload = {"query": query}
+    payload: dict[str, Any] = {"query": query}
     if history:
         payload["history"] = history
 
-    last_error = None
+    last_error: Exception | None = None
     for attempt in range(retries + 1):
         try:
             response = httpx.post(
@@ -68,7 +70,7 @@ def query_fitment(query: str, history: list | None = None, retries: int = 2) -> 
             if attempt < retries:
                 time.sleep(2)
                 continue
-            raise last_error
+    raise last_error if last_error else RuntimeError("No attempts made")
 
 
 @pytest.fixture(scope="module", autouse=True)
