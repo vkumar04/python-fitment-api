@@ -6,10 +6,11 @@ from typing import Any
 
 def parse_range(range_str: str) -> tuple[float, float]:
     """Parse a range string like '7-9' or '+25 to +45' into min/max values."""
-    cleaned = range_str.replace("+", "").replace("to", "-").replace(" ", "")
-    numbers = re.findall(r"-?\d+\.?\d*", cleaned)
+    # Extract all numbers (positive or negative)
+    numbers = re.findall(r"-?\d+\.?\d*", range_str)
     if len(numbers) >= 2:
-        return float(numbers[0]), float(numbers[1])
+        vals = [float(n) for n in numbers]
+        return min(vals), max(vals)
     elif len(numbers) == 1:
         val = float(numbers[0])
         return val - 5, val + 5
