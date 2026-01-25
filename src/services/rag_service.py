@@ -622,6 +622,7 @@ IMPORTANT NOTES:
         fitment_setup: str | None = None,
         fitment_style: str | None = None,
         limit: int = 10,
+        history: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Answer a question using RAG with DSPy.
 
@@ -630,6 +631,9 @@ IMPORTANT NOTES:
         2. Vehicle validation (does this vehicle exist?)
         3. Specs lookup (bolt pattern, center bore, wheel size limits)
         4. Response generation
+
+        Args:
+            history: List of previous messages [{"role": "user"|"assistant", "content": "..."}]
         """
         global _dspy_assistant
 
@@ -641,18 +645,70 @@ IMPORTANT NOTES:
                 "data_source": "error",
             }
 
-        # Quick parse to get make/model for database search
-        parsed: dict[str, Any] = {}
-        if not any([year, make, model, fitment_style]):
-            parsed = self.parse_query(query)
-            year = parsed.get("year") or year
-            make = parsed.get("make") or make
-            model = parsed.get("model") or model
-            fitment_style = parsed.get("fitment_style") or fitment_style
+        # Initialize trim
+        trim = None
 
-        # Get trim from parsed if not already set from history
+        # Extract vehicle info from conversation history if not in current query
+        if history:
+            for msg in history:
+                if msg["role"] == "user":
+                    hist_parsed = self.parse_query(msg["content"])
+                    if hist_parsed.get("make") and not make:
+                        make = hist_parsed.get("make")
+                    if hist_parsed.get("model") and not model:
+                        model = hist_parsed.get("model")
+                    if hist_parsed.get("year") and not year:
+                        year = hist_parsed.get("year")
+                    if hist_parsed.get("trim") and not trim:
+                        trim = hist_parsed.get("trim")
+                    if hist_parsed.get("fitment_style") and not fitment_style:
+                        fitment_style = hist_parsed.get("fitment_style")
+
+        # Parse current query to get additional vehicle info
+        current_parsed = self.parse_query(query)
+        year = current_parsed.get("year") or year
+        make = current_parsed.get("make") or make
+        model = current_parsed.get("model") or model
+        fitment_style = current_parsed.get("fitment_style") or fitment_style
         if not trim:
-            trim = parsed.get("trim")
+            trim = current_parsed.get("trim")
+
+        # If no vehicle info found, return a friendly greeting
+        if not any([year, make, model]):
+            query_lower = query.lower()
+            fitment_terms = [
+                "staggered",
+                "square",
+                "flush",
+                "aggressive",
+                "tucked",
+                "offset",
+                "wheel",
+                "tire",
+                "fitment",
+                "poke",
+                "spacer",
+            ]
+            is_fitment_followup = any(term in query_lower for term in fitment_terms)
+
+            if is_fitment_followup:
+                greeting = "I'd love to help with that! But I need to know what vehicle you're working with first. What are you driving?"
+            else:
+                greeting = 'Hey! I\'m here to help you find Kansei wheels for your ride. Just tell me what you\'re driving - like "2020 Honda Civic" or "E30 M3" - and I\'ll hook you up with wheel recommendations that fit. What are you working with?'
+
+            return {
+                "answer": greeting,
+                "sources": [],
+                "parsed": {
+                    "year": year,
+                    "make": make,
+                    "model": model,
+                    "trim": trim,
+                    "fitment_style": fitment_style,
+                },
+                "vehicle_exists": True,
+                "data_source": "greeting",
+            }
 
         # Build search query and get results from database
         search_query_parts = [p for p in [make, model] if p]

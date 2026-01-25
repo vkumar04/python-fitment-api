@@ -57,7 +57,12 @@ async def chat(request: ChatRequest):
     - "Best setup for a Chevy Camaro SS?"
     """
     try:
-        result = rag_service.ask(query=request.query)
+        # Convert messages to list of dicts for the service
+        history = None
+        if request.messages:
+            history = [{"role": m.role, "content": m.content} for m in request.messages]
+
+        result = rag_service.ask(query=request.query, history=history)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
