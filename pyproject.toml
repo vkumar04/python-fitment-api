@@ -26,5 +26,6 @@ dev = "uvicorn src.app.main:app --reload --host 0.0.0.0 --port 8000"
 [dependency-groups]
 dev = [
     "pyright>=1.1.408",
+    "pytest>=8.0.0",
     "ruff>=0.14.14",
 ]
