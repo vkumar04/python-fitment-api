@@ -873,8 +873,7 @@ IMPORTANT NOTES:
 
         message_id = f"msg_{uuid.uuid4().hex}"
 
-        # Initialize parsed dict early so history extraction can use it
-        parsed: dict[str, Any] = {}
+        # Initialize trim early so history extraction can use it
         trim = None
 
         # Extract vehicle info from conversation history if not in current query
@@ -1107,21 +1106,30 @@ FITMENT DATA:
         yield f"data: {json.dumps({'type': 'start', 'messageId': message_id})}\n\n"
 
         # Build messages list with conversation history
-        messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+        from openai.types.chat import ChatCompletionMessageParam
+
+        openai_messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": system_prompt}
+        ]
 
         # Add conversation history if available
         if history:
             for msg in history[-6:]:  # Last 6 messages for context
-                messages.append({"role": msg["role"], "content": msg["content"]})
+                if msg["role"] == "user":
+                    openai_messages.append({"role": "user", "content": msg["content"]})
+                elif msg["role"] == "assistant":
+                    openai_messages.append(
+                        {"role": "assistant", "content": msg["content"]}
+                    )
 
         # Add current query with context
-        messages.append({"role": "user", "content": user_content})
+        openai_messages.append({"role": "user", "content": user_content})
 
         # Stream from OpenAI
         client = _get_openai_client()
         stream = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=messages,
+            messages=openai_messages,
             max_tokens=512,
             stream=True,
         )
