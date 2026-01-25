@@ -24,6 +24,7 @@ from ..core.dependencies import (
 from ..core.enums import FitmentStyle
 from ..core.logging import log_error, log_request, log_response, logger
 from ..services.rag_service import RAGService
+from ..services.rag_service import get_rag_service as _get_rag_service
 
 # Validate settings on startup
 try:
@@ -35,16 +36,10 @@ except ValueError as e:
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
 
-# RAG service singleton
-_rag_service: RAGService | None = None
-
 
 def get_rag_service() -> RAGService:
-    """Get or create RAG service instance."""
-    global _rag_service
-    if _rag_service is None:
-        _rag_service = RAGService()
-    return _rag_service
+    """Get RAG service instance (uses singleton from rag_service module)."""
+    return _get_rag_service()
 
 
 @asynccontextmanager
