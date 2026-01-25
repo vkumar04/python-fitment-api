@@ -254,6 +254,8 @@ sniffio==1.3.1
     # via
     #   anthropic
     #   openai
+slowapi==0.1.9
+    # via python-rag (pyproject.toml)
 sortedcontainers==2.4.0
     # via pyiceberg
 soupsieve==2.8.3
