@@ -7,7 +7,7 @@ A Python FastAPI application that uses RAG (Retrieval Augmented Generation) to h
 - **Python 3.12** with **uv** for package management
 - **FastAPI** for the REST API
 - **Supabase** (PostgreSQL + pgvector) for storage and full-text search
-- **Anthropic Claude** for AI responses
+- **OpenAI** for AI responses
 
 ## Project Structure
 
@@ -37,7 +37,7 @@ python-rag/
 ```
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
-ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
 ```
 
 ## Running the App
@@ -106,7 +106,7 @@ The `fitments` table stores community fitment data with full-text search:
 ## Request/Response Examples
 
 ### Chat (Natural Language)
-The `/api/chat` endpoint accepts natural language queries. Claude NLP extracts vehicle info (year, make, model, fitment style) automatically.
+The `/api/chat` endpoint accepts natural language queries. OpenAI extracts vehicle info (year, make, model, fitment style) automatically.
 
 ```json
 POST /api/chat
@@ -147,10 +147,10 @@ Response:
 ## Services
 
 ### RAGService
-Core service for searching fitments and generating AI responses using Supabase full-text search and Claude.
+Core service for searching fitments and generating AI responses using Supabase full-text search and OpenAI.
 
 Key features:
-- **NLP Query Parsing**: Uses Claude to extract year, make, model, and fitment_style from natural language
+- **NLP Query Parsing**: Uses OpenAI to extract year, make, model, and fitment_style from natural language
 - **Chassis Code Handling**: Recognizes E30, FK8, GD, etc. and extracts actual model names
 - **Nickname Support**: "chevy" → Chevrolet, "bimmer" → BMW
 - **Progressive Fallback**: If exact year not found, drops year filter; if still empty, drops fitment_style
@@ -181,7 +181,7 @@ Scrapes Kansei wheels catalog (457 wheel variants):
 ```
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
-ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
 ```
 
 ### Deploy Steps
