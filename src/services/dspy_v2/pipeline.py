@@ -322,11 +322,12 @@ class FitmentPipeline(dspy.Module):
         # Step 5: Generate response
         self.generate_response = dspy.Predict(GenerateFitmentResponse)
 
-    async def retrieve(self, user_input: str) -> RetrievalResult:
+    def retrieve(self, user_input: str) -> RetrievalResult:
         """Run the retrieval phase only (steps 1-4), without generating a response.
 
         Use this for streaming: call retrieve() to gather context, then stream
-        the response via OpenAI directly.
+        the response via OpenAI directly.  This method is synchronous and
+        should be called from ``asyncio.to_thread()`` in async contexts.
         """
         # Step 1: Parse user input
         parsed = self.parse_input(user_input=user_input)
@@ -345,7 +346,7 @@ class FitmentPipeline(dspy.Module):
         parsed_info = self._extract_parsed(parsed)
 
         # Step 2: Resolve vehicle specs (DB first, then web scrape)
-        specs = await self._resolve_specs(parsed_info)
+        specs = self._resolve_specs(parsed_info)
 
         if specs is None:
             return RetrievalResult(
@@ -356,41 +357,75 @@ class FitmentPipeline(dspy.Module):
             )
 
         # Step 3: Validate specs for this vehicle
-        validation_result = await self._validate_vehicle_specs(parsed_info, specs)
+        validation_result = self._validate_vehicle_specs(parsed_info, specs)
 
         if not validation_result["is_valid"]:
-            suggestion = validation_result.get("suggestions", "")
-            errors = validation_result.get("validation_errors", [])
-            error_msg = errors[0] if errors else "Invalid vehicle combination"
-            msg = f"**Vehicle Not Found**\n\n{error_msg}"
-            if suggestion:
-                msg += f"\n\n{suggestion}"
+            # DB returned wrong specs — try knowledge base / web scrape
+            if parsed_info.get("make"):
+                web_result = search_vehicle_specs_web(
+                    year=parsed_info.get("year"),
+                    make=parsed_info["make"],
+                    model=parsed_info.get("model") or "",
+                    chassis_code=parsed_info.get("chassis_code"),
+                )
+                if web_result.get("found"):
+                    alt_specs = {
+                        "bolt_pattern": web_result["bolt_pattern"],
+                        "center_bore": web_result["center_bore"],
+                        "stud_size": web_result.get("stud_size"),
+                        "min_diameter": web_result.get("min_diameter", 15),
+                        "max_diameter": web_result.get("max_diameter", 20),
+                        "min_width": web_result.get("min_width", 6.0),
+                        "max_width": web_result.get("max_width", 10.0),
+                        "min_offset": web_result.get("min_offset", -10),
+                        "max_offset": web_result.get("max_offset", 50),
+                        "source": web_result.get("source", "knowledge_base"),
+                        "confidence": web_result.get("confidence", 0.7),
+                    }
+                    alt_validation = self._validate_vehicle_specs(parsed_info, alt_specs)
+                    if alt_validation["is_valid"]:
+                        specs = alt_specs
+                        validation_result = alt_validation
 
-            return RetrievalResult(
-                parsed=parsed_info,
-                specs=specs,
-                early_response=msg,
-                validation=validation_result,
-            )
+            if not validation_result["is_valid"]:
+                suggestion = validation_result.get("suggestions", "")
+                errors = validation_result.get("validation_errors", [])
+                error_msg = errors[0] if errors else "Invalid vehicle combination"
+                msg = f"**Vehicle Not Found**\n\n{error_msg}"
+                if suggestion:
+                    msg += f"\n\n{suggestion}"
+
+                return RetrievalResult(
+                    parsed=parsed_info,
+                    specs=specs,
+                    early_response=msg,
+                    validation=validation_result,
+                )
 
         # Step 4: Get community fitments + Kansei wheels
-        community_fitments = await db.search_community_fitments(
-            make=parsed_info["make"],
-            model=parsed_info["model"],
-            year=parsed_info.get("year"),
-            fitment_style=parsed_info.get("fitment_style"),
-            suspension=parsed_info.get("suspension"),
-        )
+        try:
+            community_fitments = db.search_community_fitments(
+                make=parsed_info["make"],
+                model=parsed_info["model"],
+                year=parsed_info.get("year"),
+                fitment_style=parsed_info.get("fitment_style"),
+                suspension=parsed_info.get("suspension"),
+            )
+        except Exception:
+            community_fitments = []
 
-        kansei_wheels = await db.find_kansei_wheels(
-            bolt_pattern=specs["bolt_pattern"],
-            min_diameter=specs["min_diameter"],
-            max_diameter=specs["max_diameter"],
-            min_width=specs["min_width"],
-            max_width=specs["max_width"],
-        )
+        try:
+            kansei_wheels = db.find_kansei_wheels(
+                bolt_pattern=specs["bolt_pattern"],
+                min_diameter=specs["min_diameter"],
+                max_diameter=specs["max_diameter"],
+                min_width=specs["min_width"],
+                max_width=specs["max_width"],
+            )
+        except Exception:
+            kansei_wheels = []
 
-        validated_wheels = await self._validate_fitment_matches(
+        validated_wheels = self._validate_fitment_matches(
             specs=specs,
             kansei_wheels=kansei_wheels,
             suspension=parsed_info.get("suspension"),
@@ -413,14 +448,14 @@ class FitmentPipeline(dspy.Module):
             kansei_str=kansei_str,
         )
 
-    async def forward(self, user_input: str) -> dspy.Prediction:
+    def forward(self, user_input: str) -> dspy.Prediction:
         """Process a user query through the full pipeline.
 
         Calls retrieve() then generates the response via DSPy.
         For streaming use cases, call retrieve() directly and stream
         the response via OpenAI.
         """
-        retrieval = await self.retrieve(user_input)
+        retrieval = self.retrieve(user_input)
 
         if retrieval.early_response:
             return dspy.Prediction(
@@ -457,7 +492,12 @@ class FitmentPipeline(dspy.Module):
             if val is None or str(val).lower() == "none":
                 return None
             if isinstance(val, str):
-                return val.strip()
+                # DSPy sometimes appends schema notes to values like:
+                # "Honda        # note: the value you produce must adhere..."
+                val = val.split("# note:")[0].split("#")[0].strip()
+                if not val or val.lower() == "none":
+                    return None
+                return val
             return val
 
         year = clean(parsed.year)
@@ -477,22 +517,26 @@ class FitmentPipeline(dspy.Module):
             "fitment_style": clean(parsed.fitment_style),
         }
 
-    async def _resolve_specs(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
+    def _resolve_specs(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve vehicle specs from DB or web search."""
         # Try DB first
-        db_specs = await db.find_vehicle_specs(
-            year=parsed.get("year"),
-            make=parsed.get("make"),
-            model=parsed.get("model"),
-            chassis_code=parsed.get("chassis_code"),
-        )
+        db_specs = None
+        try:
+            db_specs = db.find_vehicle_specs(
+                year=parsed.get("year"),
+                make=parsed.get("make"),
+                model=parsed.get("model"),
+                chassis_code=parsed.get("chassis_code"),
+            )
+        except Exception:
+            pass
 
         if db_specs and db_specs.get("bolt_pattern"):
             return db_specs
 
         # Not in DB - try web search
         if parsed.get("make"):
-            web_result = await search_vehicle_specs_web(
+            web_result = search_vehicle_specs_web(
                 year=parsed.get("year"),
                 make=parsed["make"],
                 model=parsed.get("model") or "",
@@ -508,7 +552,7 @@ class FitmentPipeline(dspy.Module):
                 year_start = parsed.get("year")
                 year_end = parsed.get("year")
 
-                await db.save_vehicle_specs(
+                db.save_vehicle_specs(
                     year_start=year_start,
                     year_end=year_end,
                     make=parsed["make"],
@@ -544,7 +588,7 @@ class FitmentPipeline(dspy.Module):
 
         return None
 
-    async def _validate_vehicle_specs(
+    def _validate_vehicle_specs(
         self,
         parsed: dict[str, Any],
         specs: dict[str, Any],
@@ -584,7 +628,7 @@ class FitmentPipeline(dspy.Module):
             "suggestions": result.suggestions,
         }
 
-    async def _validate_fitment_matches(
+    def _validate_fitment_matches(
         self,
         specs: dict[str, Any],
         kansei_wheels: list[dict[str, Any]],

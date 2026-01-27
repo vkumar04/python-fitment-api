@@ -69,9 +69,7 @@ class RAGService:
         """Process a fitment query and return the complete response."""
         try:
             pipeline = self._get_pipeline()
-            result = await asyncio.to_thread(
-                lambda: asyncio.run(pipeline.forward(query))
-            )
+            result = await asyncio.to_thread(pipeline.forward, query)
             log_external_call("dspy", "FitmentPipeline.forward", True)
 
             return {
@@ -113,10 +111,10 @@ class RAGService:
         message_id = f"msg_{uuid.uuid4().hex}"
 
         try:
-            # Phase 1: Retrieval via DSPy pipeline
+            # Phase 1: Retrieval via DSPy pipeline (sync, runs in thread)
             pipeline = self._get_pipeline()
             retrieval: RetrievalResult = await asyncio.to_thread(
-                lambda: asyncio.run(pipeline.retrieve(query))
+                pipeline.retrieve, query
             )
 
             yield _emit_event("start", {"messageId": message_id})
