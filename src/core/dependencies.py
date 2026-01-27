@@ -6,9 +6,9 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Header, HTTPException, Request
 from openai import OpenAI
+from supabase import Client
 
-from supabase import Client, create_client
-
+from ..db.client import get_supabase_client
 from .config import Settings, get_settings
 from .logging import log_db_query, log_external_call, logger
 
@@ -16,18 +16,12 @@ from .logging import log_db_query, log_external_call, logger
 # Supabase Client
 # -----------------------------------------------------------------------------
 
-# Cached client instance
-_supabase_client: Client | None = None
-
 
 def get_supabase(
-    settings: Annotated[Settings, Depends(get_settings)],
+    settings: Annotated[Settings, Depends(get_settings)] | None = None,
 ) -> Client:
     """Dependency for Supabase client."""
-    global _supabase_client
-    if _supabase_client is None:
-        _supabase_client = create_client(settings.supabase_url, settings.supabase_key)
-    return _supabase_client
+    return get_supabase_client()
 
 
 # -----------------------------------------------------------------------------
