@@ -1,14 +1,24 @@
 # Wheel Fitment RAG API
 
-A Python FastAPI application that uses RAG (Retrieval Augmented Generation) to help customers find wheel and tire fitments for their vehicles.
+Python FastAPI app using RAG to help customers find wheel/tire fitments. DSPy pipeline parses queries and retrieves context, OpenAI streams the final response.
+
+## Quick Reference
+
+```bash
+uv sync                                              # Install dependencies
+uv run uvicorn src.app.main:app --reload --port 8000  # Dev server
+uv run pytest tests/                                  # Run tests (needs OPENAI_API_KEY)
+uv run ruff check src/                                # Lint
+uv run pyright src/                                   # Type check
+```
 
 ## Tech Stack
 
 - **Python 3.12** with **uv** for package management
-- **FastAPI** for the REST API (fully async)
+- **FastAPI** (fully async endpoints)
 - **Supabase** (PostgreSQL + pgvector) for storage and full-text search
-- **OpenAI** for AI responses (async streaming)
-- **DSPy** for structured query parsing
+- **OpenAI** for streaming chat responses (`AsyncOpenAI`)
+- **DSPy** for structured query parsing and vehicle spec resolution
 - **slowapi** for rate limiting
 
 ## Project Structure
@@ -17,36 +27,68 @@ A Python FastAPI application that uses RAG (Retrieval Augmented Generation) to h
 python-rag/
 ├── src/
 │   ├── app/
-│   │   └── main.py              # FastAPI app and endpoints
+│   │   └── main.py                  # FastAPI app, endpoints, request models
 │   ├── core/
-│   │   ├── config.py            # Pydantic settings & env validation
-│   │   ├── dependencies.py      # FastAPI dependency injection
-│   │   ├── enums.py             # FitmentStyle, SuspensionType enums
-│   │   └── logging.py           # Structured logging
-│   ├── chat/
-│   │   ├── context.py           # Vehicle context parsing (LRU cached)
-│   │   └── streaming.py         # Async SSE streaming utilities
+│   │   ├── config.py                # Pydantic settings & env validation
+│   │   ├── dependencies.py          # FastAPI dependency injection
+│   │   ├── enums.py                 # FitmentStyle, SuspensionType enums
+│   │   └── logging.py              # Structured logging
 │   ├── db/
-│   │   └── fitments.py          # Async Supabase operations
+│   │   ├── client.py               # Supabase client singleton
+│   │   └── fitments.py             # Async Supabase queries
+│   ├── models/
+│   │   └── fitment.py              # Pydantic models (FitmentData, FitmentQuery, etc.)
 │   ├── services/
-│   │   ├── rag_service.py       # Async RAG orchestration
-│   │   ├── kansei.py            # Kansei wheel matching (indexed lookup)
-│   │   ├── dspy_fitment.py      # DSPy query parsing
-│   │   ├── validation.py        # Vehicle specs validation
-│   │   └── fitment.py           # Fitment classification utilities
+│   │   ├── rag_service.py          # Orchestrates DSPy retrieval + OpenAI streaming
+│   │   ├── fitment.py              # Fitment classification utilities
+│   │   ├── kansei_scraper.py       # Kansei wheel catalog scraping
+│   │   ├── wheel_size_lookup.py    # OEM specs from wheel-size.com
+│   │   └── dspy_v2/               # Core DSPy pipeline
+│   │       ├── pipeline.py         # FitmentPipeline: parse → resolve → validate → fetch
+│   │       ├── signatures.py       # DSPy signatures (ParseVehicleInput, etc.)
+│   │       ├── tools.py            # Knowledge base + web scraping for vehicle specs
+│   │       └── db.py               # Database queries used by pipeline
 │   ├── prompts/
-│   │   └── fitment_assistant.py # System prompts for LLM
+│   │   └── fitment_assistant.py    # System prompts for OpenAI
 │   └── utils/
-│       └── converters.py        # Type conversion utilities
+│       └── converters.py           # Type conversion utilities
+├── tests/
+│   ├── test_fitment_queries.py     # Integration tests (requires running server)
+│   ├── test_dspy_pipeline.py       # Unit tests for DSPy pipeline
+│   └── test_bolt_patterns.py       # Bolt pattern validation tests
 ├── datafiles/
-│   ├── Fitment-data-master.csv  # Community fitment data (54k+ records)
-│   └── kansei_wheels.json       # Scraped Kansei wheel catalog
+│   ├── Fitment-data-master.csv     # Community fitment data (54k+ records)
+│   ├── kansei_wheels.json          # Scraped Kansei wheel catalog
+│   └── wheel_size_cache.json       # Cached OEM specs from wheel-size.com
 ├── supabase/
-│   └── migrations/              # Database migrations
+│   └── migrations/                 # Database migrations
+├── supabase_setup.sql              # Database schema + indexes
+├── run.py                          # Production entry point (reads PORT env)
 ├── pyproject.toml
-├── railway.toml
-└── .env
+├── Dockerfile
+├── nixpacks.toml                   # Railway build config
+└── railway.toml
 ```
+
+## Architecture
+
+### Request Flow
+
+```
+POST /api/chat → RAGService.ask_streaming()
+  1. DSPy pipeline (sync, runs in asyncio.to_thread):
+     ParseVehicleInput → ResolveSpecs → ValidateSpecs → FetchData
+  2. OpenAI streams response using retrieved context (AsyncOpenAI)
+  3. SSE events sent to client (Vercel AI SDK Data Stream Protocol)
+```
+
+### Key Design Decisions
+
+- **DSPy pipeline is synchronous** — runs inside `asyncio.to_thread()` since DSPy doesn't support async
+- **Spec resolution order**: hardcoded knowledge base → wheel-size.com scraping → LLM fallback
+- **Supabase client** is a lazy singleton (`src/db/client.py`)
+- **LRU caching** on query parsing to avoid redundant LLM calls
+- **Full-text search** via PostgreSQL tsvector (not vector embeddings)
 
 ## Environment Variables
 
@@ -59,120 +101,61 @@ OPENAI_API_KEY=your_openai_api_key
 # Optional
 OPENAI_MODEL=gpt-4o-mini          # Model for chat responses
 OPENAI_MAX_TOKENS=512             # Max tokens per response
-DSPY_MODEL=openai/gpt-4o          # Model for query parsing
+DSPY_MODEL=openai/gpt-4o          # Model for DSPy pipeline
 API_ADMIN_KEY=your_admin_key      # Required for /api/load-data
 ALLOWED_ORIGINS=http://localhost:3000,https://yourapp.com
-RATE_LIMIT_REQUESTS=30            # Requests per period
+RATE_LIMIT_REQUESTS=30            # Per period per IP
 RATE_LIMIT_PERIOD=60              # Period in seconds
 ```
 
-## Running the App
-
-```bash
-# Install dependencies
-uv sync
-
-# Run database migrations (requires supabase CLI and login)
-supabase link --project-ref your-project-ref
-supabase db push
-
-# Run the development server
-uv run uvicorn src.app.main:app --reload --port 8000
-```
-
-## Database Schema
-
-The `fitments` table stores community fitment data with full-text search:
-
-- `id`, `year`, `make`, `model` - Vehicle identification
-- `front_*` / `rear_*` - Wheel specs (diameter, width, offset, backspacing, spacer)
-- `tire_front` / `tire_rear` - Tire sizes
-- `fitment_setup` - 'square' or 'staggered'
-- `fitment_style` - 'aggressive', 'flush', or 'tucked'
-- `has_poke`, `needs_mods` - Fitment characteristics
-- `document` - Full-text searchable content
-- `fts` - Generated tsvector column for PostgreSQL full-text search
-
-### Indexes
-
-Composite indexes for performance:
-- `(year, make, model)` - Exact vehicle lookups
-- `(make, model)` - Searches without year
-- `(make, fitment_style)` - Style-filtered searches
-- `(year, fitment_style)` - Year + style filtering
-
 ## API Endpoints
 
-### Health Check
-- `GET /health` - Basic health check
-- `GET /health?detailed=true` - Checks Supabase and OpenAI connectivity
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Basic health check (`?detailed=true` checks Supabase + OpenAI) |
+| `POST` | `/api/chat` | Streaming chat (SSE, Vercel AI SDK compatible, 30 req/min) |
+| `GET` | `/api/makes` | All vehicle makes |
+| `GET` | `/api/models/{make}` | Models for a make |
+| `GET` | `/api/years` | All years |
+| `GET` | `/api/fitment-styles` | Fitment style enum values |
+| `POST` | `/api/load-data` | Load CSV data (requires `X-Admin-Key` header) |
 
-### Chat Endpoint
-- `POST /api/chat` - Async streaming chat (Vercel AI SDK compatible)
-  - Rate limited: 30 requests/minute per IP
-  - Input validation: query 1-1000 chars, max 20 history messages
+## Database
 
-### Data Endpoints
-- `GET /api/makes` - Get all vehicle makes
-- `GET /api/models/{make}` - Get models for a make
-- `GET /api/years` - Get all years
-- `GET /api/fitment-styles` - Get fitment styles
-- `POST /api/load-data` - Load CSV data (requires X-Admin-Key header)
+The `fitments` table uses PostgreSQL full-text search:
 
-## Architecture
+- Vehicle ID: `year`, `make`, `model`
+- Wheel specs: `front_*` / `rear_*` (diameter, width, offset, backspacing, spacer)
+- Tires: `tire_front`, `tire_rear`
+- Classification: `fitment_setup` (square/staggered), `fitment_style` (aggressive/flush/tucked)
+- Flags: `has_poke`, `needs_mods`
+- Search: `fts` generated tsvector column
 
-### Async Throughout
-- All database operations use `asyncio.to_thread()` for non-blocking I/O
-- OpenAI streaming uses `AsyncOpenAI` client
-- Endpoints are fully async
+Composite indexes on `(year, make, model)`, `(make, model)`, `(make, fitment_style)`, `(year, fitment_style)`.
 
-### Caching
-- Query parsing uses `@lru_cache(maxsize=1000)` to avoid redundant LLM calls
-- Supabase client is lazily initialized and reused
+Schema defined in `supabase_setup.sql`. Migrations in `supabase/migrations/`.
 
-### Rate Limiting
-- slowapi middleware limits `/api/chat` to 30 requests/minute per IP
-- Returns 429 on limit exceeded
+## Testing
 
-### Logging
-- Structured logging with request/response timing
-- Database query logging with duration
-- External service call logging (OpenAI, Supabase)
+Tests require `OPENAI_API_KEY`. Integration tests in `test_fitment_queries.py` make HTTP calls to a running server.
 
-### Security
-- CORS restricted to configured origins (not `*`)
-- Admin endpoints protected with `X-Admin-Key` header
-- Input validation via Pydantic models
-- Rate limiting to prevent abuse
-
-## Railway Deployment
-
-### Environment Variables (set in Railway dashboard)
-```
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_supabase_anon_key
-OPENAI_API_KEY=your_openai_api_key
-API_ADMIN_KEY=your_secret_admin_key
-ALLOWED_ORIGINS=https://yourfrontend.com
+```bash
+uv run pytest tests/                        # All tests
+uv run pytest tests/test_bolt_patterns.py   # Just bolt pattern tests (no API key needed)
+uv run pytest tests/test_dspy_pipeline.py   # Pipeline unit tests
 ```
 
-### Deploy Steps
-1. Push code to GitHub
-2. Create new Railway project from GitHub repo
-3. Add environment variables
-4. Railway auto-deploys on push to main
+## Deployment (Railway)
 
-### Keep-Alive Cron
-A Supabase pg_cron job pings `/health` every 5 minutes to prevent Railway free tier sleep:
-```sql
-select cron.schedule('ping-railway-health', '*/5 * * * *',
-  $$ select net.http_get('https://fitmentbot.up.railway.app/health'); $$
-);
-```
+- `nixpacks.toml` configures the build (`uv sync --frozen`)
+- `run.py` is the entry point, reads `PORT` from environment
+- `Dockerfile` available as alternative build path
+- Auto-deploys on push to main
+- Supabase `pg_cron` pings `/health` every 5 minutes to prevent free tier sleep
 
-## Notes for Development
+## Development Notes
 
 - Run `uv run ruff check src/` and `uv run pyright src/` before committing
-- Frontend (Next.js) should set `streamProtocol: 'data'` in useChat()
-- Uses PostgreSQL full-text search instead of vector embeddings
-- 54,570 community fitment records loaded
+- Frontend (Next.js) should set `streamProtocol: 'data'` in `useChat()`
+- 54,570 community fitment records in the database
+- `wheel_size_cache.json` caches OEM specs to avoid repeated scraping
