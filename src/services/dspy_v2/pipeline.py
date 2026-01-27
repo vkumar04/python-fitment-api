@@ -6,9 +6,13 @@ This module orchestrates the entire fitment flow:
 3. Get fitment data → community fitments + Kansei wheels
 4. Validate matches → ensure wheels actually fit
 5. Generate response → conversational output
+
+The pipeline exposes `retrieve()` for RAG use cases where the caller
+streams the final response separately (e.g. via OpenAI streaming).
 """
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 import dspy
@@ -22,6 +26,30 @@ from .signatures import (
     ValidateVehicleSpecs,
 )
 from .tools import search_vehicle_specs_web, validate_bolt_pattern
+
+
+@dataclass
+class RetrievalResult:
+    """Result of the retrieval phase (parse → resolve → validate → fetch).
+
+    This contains everything the LLM needs to generate a response,
+    but does NOT include the generated response itself.
+    """
+
+    parsed: dict[str, Any]
+    specs: dict[str, Any] | None
+    kansei_wheels: list[dict[str, Any]] = field(default_factory=list)
+    community_fitments: list[dict[str, Any]] = field(default_factory=list)
+    validation: dict[str, Any] = field(default_factory=dict)
+
+    # Pre-formatted strings for the prompt
+    vehicle_summary: str = ""
+    specs_summary: str = ""
+    community_str: str = ""
+    kansei_str: str = ""
+
+    # If set, the caller should return this text directly (error/clarification)
+    early_response: str | None = None
 
 # -----------------------------------------------------------------------------
 # Training Data for Optimization
@@ -294,73 +322,58 @@ class FitmentPipeline(dspy.Module):
         # Step 5: Generate response
         self.generate_response = dspy.Predict(GenerateFitmentResponse)
 
-    async def forward(self, user_input: str) -> dspy.Prediction:
-        """Process a user query through the full pipeline.
+    async def retrieve(self, user_input: str) -> RetrievalResult:
+        """Run the retrieval phase only (steps 1-4), without generating a response.
 
-        Returns a Prediction with:
-        - response: The conversational response text
-        - parsed: Parsed vehicle info
-        - specs: Vehicle specifications
-        - kansei_wheels: Matching Kansei wheels
-        - community_fitments: Community fitment data
-        - validation: Validation results
+        Use this for streaming: call retrieve() to gather context, then stream
+        the response via OpenAI directly.
         """
         # Step 1: Parse user input
         parsed = self.parse_input(user_input=user_input)
 
-        # Check if we got enough info
         if not parsed.is_valid_input or str(parsed.is_valid_input).lower() == "false":
             clarification = (
                 parsed.clarification_needed or "What vehicle are you working with?"
             )
-            return dspy.Prediction(
-                response=clarification,
+            return RetrievalResult(
                 parsed=self._extract_parsed(parsed),
                 specs=None,
-                kansei_wheels=[],
-                community_fitments=[],
+                early_response=clarification,
                 validation={"valid": False, "reason": "insufficient_input"},
             )
 
         parsed_info = self._extract_parsed(parsed)
 
-        # Step 2: Resolve vehicle specs (DB lookup first, then web search)
+        # Step 2: Resolve vehicle specs (DB first, then web scrape)
         specs = await self._resolve_specs(parsed_info)
 
         if specs is None:
-            # Couldn't find specs anywhere
-            return dspy.Prediction(
-                response="I couldn't find wheel specs for that vehicle. Can you provide more details like the year or chassis code?",
+            return RetrievalResult(
                 parsed=parsed_info,
                 specs=None,
-                kansei_wheels=[],
-                community_fitments=[],
+                early_response="I couldn't find wheel specs for that vehicle. Can you provide more details like the year or chassis code?",
                 validation={"valid": False, "reason": "specs_not_found"},
             )
 
-        # Step 3: Validate the specs make sense for this vehicle
+        # Step 3: Validate specs for this vehicle
         validation_result = await self._validate_vehicle_specs(parsed_info, specs)
 
         if not validation_result["is_valid"]:
-            # Invalid vehicle combination
             suggestion = validation_result.get("suggestions", "")
             errors = validation_result.get("validation_errors", [])
             error_msg = errors[0] if errors else "Invalid vehicle combination"
-
-            response = f"**Vehicle Not Found**\n\n{error_msg}"
+            msg = f"**Vehicle Not Found**\n\n{error_msg}"
             if suggestion:
-                response += f"\n\n{suggestion}"
+                msg += f"\n\n{suggestion}"
 
-            return dspy.Prediction(
-                response=response,
+            return RetrievalResult(
                 parsed=parsed_info,
                 specs=specs,
-                kansei_wheels=[],
-                community_fitments=[],
+                early_response=msg,
                 validation=validation_result,
             )
 
-        # Step 4: Get community fitments and Kansei wheels
+        # Step 4: Get community fitments + Kansei wheels
         community_fitments = await db.search_community_fitments(
             make=parsed_info["make"],
             model=parsed_info["model"],
@@ -369,7 +382,6 @@ class FitmentPipeline(dspy.Module):
             suspension=parsed_info.get("suspension"),
         )
 
-        # Get Kansei wheels for this bolt pattern
         kansei_wheels = await db.find_kansei_wheels(
             bolt_pattern=specs["bolt_pattern"],
             min_diameter=specs["min_diameter"],
@@ -378,29 +390,64 @@ class FitmentPipeline(dspy.Module):
             max_width=specs["max_width"],
         )
 
-        # Step 5: Validate fitment matches
         validated_wheels = await self._validate_fitment_matches(
             specs=specs,
             kansei_wheels=kansei_wheels,
             suspension=parsed_info.get("suspension"),
         )
 
-        # Step 6: Generate conversational response
-        response = await self._generate_response(
-            parsed_info=parsed_info,
-            specs=specs,
-            community_fitments=community_fitments,
-            kansei_wheels=validated_wheels["valid"],
-            fitment_style=parsed_info.get("fitment_style"),
-        )
+        # Build formatted strings for the prompt
+        vehicle_summary, specs_summary = self._build_summaries(parsed_info, specs)
+        community_str = db.format_fitments_for_prompt(community_fitments)
+        kansei_str = db.format_kansei_for_prompt(validated_wheels["valid"])
 
-        return dspy.Prediction(
-            response=response,
+        return RetrievalResult(
             parsed=parsed_info,
             specs=specs,
             kansei_wheels=validated_wheels["valid"],
             community_fitments=community_fitments,
             validation={"valid": True, "wheel_validation": validated_wheels},
+            vehicle_summary=vehicle_summary,
+            specs_summary=specs_summary,
+            community_str=community_str,
+            kansei_str=kansei_str,
+        )
+
+    async def forward(self, user_input: str) -> dspy.Prediction:
+        """Process a user query through the full pipeline.
+
+        Calls retrieve() then generates the response via DSPy.
+        For streaming use cases, call retrieve() directly and stream
+        the response via OpenAI.
+        """
+        retrieval = await self.retrieve(user_input)
+
+        if retrieval.early_response:
+            return dspy.Prediction(
+                response=retrieval.early_response,
+                parsed=retrieval.parsed,
+                specs=retrieval.specs,
+                kansei_wheels=retrieval.kansei_wheels,
+                community_fitments=retrieval.community_fitments,
+                validation=retrieval.validation,
+            )
+
+        # Generate response via DSPy
+        result = self.generate_response(
+            vehicle_summary=retrieval.vehicle_summary,
+            vehicle_specs=retrieval.specs_summary,
+            community_fitments=retrieval.community_str,
+            kansei_options=retrieval.kansei_str,
+            fitment_style=retrieval.parsed.get("fitment_style"),
+        )
+
+        return dspy.Prediction(
+            response=result.response,
+            parsed=retrieval.parsed,
+            specs=retrieval.specs,
+            kansei_wheels=retrieval.kansei_wheels,
+            community_fitments=retrieval.community_fitments,
+            validation=retrieval.validation,
         )
 
     def _extract_parsed(self, parsed: dspy.Prediction) -> dict[str, Any]:
@@ -633,16 +680,12 @@ class FitmentPipeline(dspy.Module):
             "summary": summary,
         }
 
-    async def _generate_response(
+    def _build_summaries(
         self,
         parsed_info: dict[str, Any],
         specs: dict[str, Any],
-        community_fitments: list[dict[str, Any]],
-        kansei_wheels: list[dict[str, Any]],
-        fitment_style: str | None,
-    ) -> str:
-        """Generate the conversational response."""
-        # Build vehicle summary
+    ) -> tuple[str, str]:
+        """Build formatted vehicle summary and specs summary strings."""
         year_str = str(parsed_info.get("year")) if parsed_info.get("year") else ""
         chassis_str = (
             f" ({parsed_info.get('chassis_code')})"
@@ -654,7 +697,6 @@ class FitmentPipeline(dspy.Module):
         if parsed_info.get("suspension"):
             vehicle_summary += f" on {parsed_info['suspension']}"
 
-        # Build specs summary
         hub_ring_note = ""
         center_bore = specs.get("center_bore", 0)
         if center_bore and center_bore != 73.1:
@@ -666,22 +708,7 @@ Wheel Diameter: {specs.get("min_diameter", 15)}" to {specs.get("max_diameter", 2
 Width Range: {specs.get("min_width", 6.0)}" to {specs.get("max_width", 10.0)}"
 Offset Range: +{specs.get("min_offset", -10)} to +{specs.get("max_offset", 50)}"""
 
-        # Format community fitments
-        community_str = db.format_fitments_for_prompt(community_fitments)
-
-        # Format Kansei wheels
-        kansei_str = db.format_kansei_for_prompt(kansei_wheels)
-
-        # Generate response using DSPy
-        result = self.generate_response(
-            vehicle_summary=vehicle_summary,
-            vehicle_specs=specs_summary,
-            community_fitments=community_str,
-            kansei_options=kansei_str,
-            fitment_style=fitment_style,
-        )
-
-        return result.response
+        return vehicle_summary, specs_summary
 
 
 # -----------------------------------------------------------------------------

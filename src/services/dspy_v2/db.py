@@ -4,10 +4,9 @@ Handles vehicle_specs lookups and inserts, plus Kansei wheel queries.
 """
 
 import asyncio
-import os
 from typing import Any
 
-from supabase import Client, create_client
+from ...db.client import get_supabase_client as _get_client
 
 
 def _safe_float(val: Any, default: float = 0.0) -> float:
@@ -28,21 +27,6 @@ def _safe_int(val: Any, default: int = 0) -> int:
         return int(val)
     except (ValueError, TypeError):
         return default
-
-
-# Lazy-loaded Supabase client
-_supabase: Client | None = None
-
-
-def _get_client() -> Client:
-    """Get or create Supabase client."""
-    global _supabase
-    if _supabase is None:
-        _supabase = create_client(
-            os.getenv("SUPABASE_URL", ""),
-            os.getenv("SUPABASE_KEY", ""),
-        )
-    return _supabase
 
 
 # -----------------------------------------------------------------------------
@@ -251,55 +235,6 @@ async def find_kansei_wheels(
                         "weight": _safe_float(row.get("weight"))
                         if row.get("weight")
                         else None,
-                    }
-                )
-
-    return wheels
-
-
-async def find_kansei_by_exact_size(
-    bolt_pattern: str,
-    diameter: float,
-    width: float,
-    offset_min: int,
-    offset_max: int,
-) -> list[dict[str, Any]]:
-    """Find Kansei wheels matching exact size with offset range."""
-
-    def _query():
-        return (
-            _get_client()
-            .table("kansei_wheels")
-            .select(
-                "id, model, finish, sku, diameter, width, bolt_pattern, wheel_offset, price, url, in_stock"
-            )
-            .ilike("bolt_pattern", bolt_pattern)
-            .eq("diameter", diameter)
-            .gte("width", width - 0.5)
-            .lte("width", width + 0.5)
-            .gte("wheel_offset", offset_min)
-            .lte("wheel_offset", offset_max)
-            .eq("in_stock", True)
-            .execute()
-        )
-
-    result = await asyncio.to_thread(_query)
-
-    wheels = []
-    if result.data and isinstance(result.data, list):
-        for row in result.data:
-            if isinstance(row, dict):
-                wheels.append(
-                    {
-                        "model": row.get("model"),
-                        "finish": row.get("finish"),
-                        "diameter": _safe_float(row.get("diameter"), 0.0),
-                        "width": _safe_float(row.get("width"), 0.0),
-                        "offset": _safe_int(row.get("wheel_offset"), 0),
-                        "price": _safe_float(row.get("price"))
-                        if row.get("price")
-                        else None,
-                        "url": row.get("url"),
                     }
                 )
 

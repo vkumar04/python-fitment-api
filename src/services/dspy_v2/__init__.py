@@ -1,6 +1,6 @@
 """DSPy v2 Pipeline - Refactored fitment assistant with proper validation gates."""
 
-from .pipeline import FitmentPipeline, create_pipeline
+from .pipeline import FitmentPipeline, RetrievalResult, create_pipeline
 from .signatures import (
     GenerateFitmentResponse,
     ParseVehicleInput,
@@ -10,6 +10,7 @@ from .signatures import (
 
 __all__ = [
     "FitmentPipeline",
+    "RetrievalResult",
     "create_pipeline",
     "ParseVehicleInput",
     "ValidateVehicleSpecs",
