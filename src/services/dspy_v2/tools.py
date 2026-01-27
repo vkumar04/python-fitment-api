@@ -1,9 +1,10 @@
 """Tools for the DSPy v2 pipeline.
 
 Provides vehicle spec lookup: knowledge base first, then wheel-size.com scraping.
+All functions are **synchronous** because the pipeline runs inside
+``asyncio.to_thread()`` from the RAG service.
 """
 
-import asyncio
 import logging
 import re
 from typing import Any
@@ -13,7 +14,7 @@ from ..wheel_size_lookup import OEMSpecs, get_wheel_size_lookup
 logger = logging.getLogger(__name__)
 
 
-async def search_vehicle_specs_web(
+def search_vehicle_specs_web(
     year: int | None,
     make: str,
     model: str,
@@ -40,7 +41,7 @@ async def search_vehicle_specs_web(
 
     # Step 2: Scrape wheel-size.com (requires year for URL construction)
     if year:
-        scraped = await _scrape_wheel_size(year, make, model)
+        scraped = _scrape_wheel_size(year, make, model)
         if scraped:
             return scraped
 
@@ -56,13 +57,13 @@ async def search_vehicle_specs_web(
     }
 
 
-async def _scrape_wheel_size(
+def _scrape_wheel_size(
     year: int, make: str, model: str
 ) -> dict[str, Any] | None:
     """Scrape wheel-size.com and validate the results."""
     try:
         lookup = get_wheel_size_lookup()
-        oem: OEMSpecs | None = await asyncio.to_thread(lookup.lookup, year, make, model)
+        oem: OEMSpecs | None = lookup.lookup(year, make, model)
     except Exception as e:
         logger.warning("wheel-size.com scrape failed: %s", e)
         return None

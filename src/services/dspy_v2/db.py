@@ -1,9 +1,10 @@
 """Database operations for the DSPy v2 pipeline.
 
 Handles vehicle_specs lookups and inserts, plus Kansei wheel queries.
+All functions are **synchronous** because the pipeline runs inside
+``asyncio.to_thread()`` from the RAG service.
 """
 
-import asyncio
 from typing import Any
 
 from ...db.client import get_supabase_client as _get_client
@@ -34,7 +35,7 @@ def _safe_int(val: Any, default: int = 0) -> int:
 # -----------------------------------------------------------------------------
 
 
-async def find_vehicle_specs(
+def find_vehicle_specs(
     year: int | None = None,
     make: str | None = None,
     model: str | None = None,
@@ -44,23 +45,19 @@ async def find_vehicle_specs(
 
     Returns the best matching spec or None if not found.
     """
-
-    def _query():
-        return (
-            _get_client()
-            .rpc(
-                "find_vehicle_specs",
-                {
-                    "p_year": year,
-                    "p_make": make,
-                    "p_model": model,
-                    "p_chassis_code": chassis_code,
-                },
-            )
-            .execute()
+    result = (
+        _get_client()
+        .rpc(
+            "find_vehicle_specs",
+            {
+                "p_year": year,
+                "p_make": make,
+                "p_model": model,
+                "p_chassis_code": chassis_code,
+            },
         )
-
-    result = await asyncio.to_thread(_query)
+        .execute()
+    )
 
     if result.data and isinstance(result.data, list) and len(result.data) > 0:
         row = result.data[0]
@@ -111,7 +108,7 @@ async def find_vehicle_specs(
     return None
 
 
-async def save_vehicle_specs(
+def save_vehicle_specs(
     year_start: int | None,
     year_end: int | None,
     make: str,
@@ -134,36 +131,32 @@ async def save_vehicle_specs(
 
     Returns the ID of the inserted/updated row.
     """
-
-    def _upsert():
-        return (
-            _get_client()
-            .rpc(
-                "upsert_vehicle_specs",
-                {
-                    "p_year_start": year_start,
-                    "p_year_end": year_end,
-                    "p_make": make,
-                    "p_model": model,
-                    "p_chassis_code": chassis_code,
-                    "p_bolt_pattern": bolt_pattern,
-                    "p_center_bore": center_bore,
-                    "p_stud_size": stud_size,
-                    "p_min_diameter": min_diameter,
-                    "p_max_diameter": max_diameter,
-                    "p_min_width": min_width,
-                    "p_max_width": max_width,
-                    "p_min_offset": min_offset,
-                    "p_max_offset": max_offset,
-                    "p_source": source,
-                    "p_source_url": source_url,
-                    "p_confidence": confidence,
-                },
-            )
-            .execute()
+    result = (
+        _get_client()
+        .rpc(
+            "upsert_vehicle_specs",
+            {
+                "p_year_start": year_start,
+                "p_year_end": year_end,
+                "p_make": make,
+                "p_model": model,
+                "p_chassis_code": chassis_code,
+                "p_bolt_pattern": bolt_pattern,
+                "p_center_bore": center_bore,
+                "p_stud_size": stud_size,
+                "p_min_diameter": min_diameter,
+                "p_max_diameter": max_diameter,
+                "p_min_width": min_width,
+                "p_max_width": max_width,
+                "p_min_offset": min_offset,
+                "p_max_offset": max_offset,
+                "p_source": source,
+                "p_source_url": source_url,
+                "p_confidence": confidence,
+            },
         )
-
-    result = await asyncio.to_thread(_upsert)
+        .execute()
+    )
 
     if result.data is not None:
         return int(result.data) if isinstance(result.data, (int, float, str)) else None
@@ -176,7 +169,7 @@ async def save_vehicle_specs(
 # -----------------------------------------------------------------------------
 
 
-async def find_kansei_wheels(
+def find_kansei_wheels(
     bolt_pattern: str,
     min_diameter: int | None = None,
     max_diameter: int | None = None,
@@ -188,29 +181,25 @@ async def find_kansei_wheels(
 
     Returns list of wheels with all relevant info.
     """
-
-    def _query():
-        client = _get_client()
-        query = (
-            client.table("kansei_wheels")
-            .select(
-                "id, model, finish, sku, diameter, width, bolt_pattern, wheel_offset, price, category, url, in_stock, weight"
-            )
-            .ilike("bolt_pattern", bolt_pattern)
+    client = _get_client()
+    query = (
+        client.table("kansei_wheels")
+        .select(
+            "id, model, finish, sku, diameter, width, bolt_pattern, wheel_offset, price, category, url, in_stock, weight"
         )
+        .ilike("bolt_pattern", bolt_pattern)
+    )
 
-        if min_diameter is not None:
-            query = query.gte("diameter", min_diameter)
-        if max_diameter is not None:
-            query = query.lte("diameter", max_diameter)
-        if min_width is not None:
-            query = query.gte("width", min_width)
-        if max_width is not None:
-            query = query.lte("width", max_width)
+    if min_diameter is not None:
+        query = query.gte("diameter", min_diameter)
+    if max_diameter is not None:
+        query = query.lte("diameter", max_diameter)
+    if min_width is not None:
+        query = query.gte("width", min_width)
+    if max_width is not None:
+        query = query.lte("width", max_width)
 
-        return query.eq("in_stock", True).limit(limit).execute()
-
-    result = await asyncio.to_thread(_query)
+    result = query.eq("in_stock", True).limit(limit).execute()
 
     wheels = []
     if result.data and isinstance(result.data, list):
@@ -246,7 +235,7 @@ async def find_kansei_wheels(
 # -----------------------------------------------------------------------------
 
 
-async def search_community_fitments(
+def search_community_fitments(
     make: str,
     model: str,
     year: int | None = None,
@@ -255,31 +244,27 @@ async def search_community_fitments(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Search community fitment data for proven setups."""
+    # Build search query
+    search_terms = [make, model]
+    if year:
+        search_terms.insert(0, str(year))
+    search_query = " ".join(search_terms)
 
-    def _query():
-        # Build search query
-        search_terms = [make, model]
-        if year:
-            search_terms.insert(0, str(year))
-        search_query = " ".join(search_terms)
-
-        return (
-            _get_client()
-            .rpc(
-                "search_fitments",
-                {
-                    "search_query": search_query,
-                    "filter_year": year,
-                    "filter_make": make,
-                    "filter_model": model,
-                    "filter_style": fitment_style,
-                    "result_limit": limit,
-                },
-            )
-            .execute()
+    result = (
+        _get_client()
+        .rpc(
+            "search_fitments",
+            {
+                "search_query": search_query,
+                "filter_year": year,
+                "filter_make": make,
+                "filter_model": model,
+                "filter_style": fitment_style,
+                "result_limit": limit,
+            },
         )
-
-    result = await asyncio.to_thread(_query)
+        .execute()
+    )
 
     fitments = []
     if result.data and isinstance(result.data, list):
