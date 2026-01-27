@@ -357,50 +357,79 @@ class FitmentPipeline(dspy.Module):
             )
 
         # Step 3: Validate specs for this vehicle
-        validation_result = self._validate_vehicle_specs(parsed_info, specs)
+        # Skip LLM validation for trusted sources — the LLM sometimes
+        # incorrectly rejects valid numeric ranges (e.g. offset 10-35 for E30 M3).
+        # Only use LLM validation for unverified/low-confidence specs.
+        is_trusted = (
+            specs.get("verified") is True
+            or specs.get("source") in ("manual", "knowledge_base")
+            or float(specs.get("confidence", 0)) >= 0.85
+        )
 
-        if not validation_result["is_valid"]:
-            # DB returned wrong specs — try knowledge base / web scrape
-            if parsed_info.get("make"):
-                web_result = search_vehicle_specs_web(
-                    year=parsed_info.get("year"),
-                    make=parsed_info["make"],
-                    model=parsed_info.get("model") or "",
-                    chassis_code=parsed_info.get("chassis_code"),
-                )
-                if web_result.get("found"):
-                    alt_specs = {
-                        "bolt_pattern": web_result["bolt_pattern"],
-                        "center_bore": web_result["center_bore"],
-                        "stud_size": web_result.get("stud_size"),
-                        "min_diameter": web_result.get("min_diameter", 15),
-                        "max_diameter": web_result.get("max_diameter", 20),
-                        "min_width": web_result.get("min_width", 6.0),
-                        "max_width": web_result.get("max_width", 10.0),
-                        "min_offset": web_result.get("min_offset", -10),
-                        "max_offset": web_result.get("max_offset", 50),
-                        "source": web_result.get("source", "knowledge_base"),
-                        "confidence": web_result.get("confidence", 0.7),
-                    }
-                    alt_validation = self._validate_vehicle_specs(parsed_info, alt_specs)
-                    if alt_validation["is_valid"]:
-                        specs = alt_specs
-                        validation_result = alt_validation
+        if is_trusted:
+            validation_result: dict[str, Any] = {
+                "is_valid": True,
+                "validation_errors": [],
+                "corrected_specs": None,
+                "suggestions": None,
+            }
+        else:
+            validation_result = self._validate_vehicle_specs(parsed_info, specs)
 
             if not validation_result["is_valid"]:
-                suggestion = validation_result.get("suggestions", "")
-                errors = validation_result.get("validation_errors", [])
-                error_msg = errors[0] if errors else "Invalid vehicle combination"
-                msg = f"**Vehicle Not Found**\n\n{error_msg}"
-                if suggestion:
-                    msg += f"\n\n{suggestion}"
+                # DB returned wrong specs — try knowledge base / web scrape
+                if parsed_info.get("make"):
+                    web_result = search_vehicle_specs_web(
+                        year=parsed_info.get("year"),
+                        make=parsed_info["make"],
+                        model=parsed_info.get("model") or "",
+                        chassis_code=parsed_info.get("chassis_code"),
+                    )
+                    if web_result.get("found"):
+                        alt_specs = {
+                            "bolt_pattern": web_result["bolt_pattern"],
+                            "center_bore": web_result["center_bore"],
+                            "stud_size": web_result.get("stud_size"),
+                            "min_diameter": web_result.get("min_diameter", 15),
+                            "max_diameter": web_result.get("max_diameter", 20),
+                            "min_width": web_result.get("min_width", 6.0),
+                            "max_width": web_result.get("max_width", 10.0),
+                            "min_offset": web_result.get("min_offset", -10),
+                            "max_offset": web_result.get("max_offset", 50),
+                            "source": web_result.get("source", "knowledge_base"),
+                            "confidence": web_result.get("confidence", 0.7),
+                        }
+                        # Knowledge base results are trusted — skip LLM validation
+                        if alt_specs.get("source") == "knowledge_base":
+                            specs = alt_specs
+                            validation_result = {
+                                "is_valid": True,
+                                "validation_errors": [],
+                                "corrected_specs": None,
+                                "suggestions": None,
+                            }
+                        else:
+                            alt_validation = self._validate_vehicle_specs(
+                                parsed_info, alt_specs
+                            )
+                            if alt_validation["is_valid"]:
+                                specs = alt_specs
+                                validation_result = alt_validation
 
-                return RetrievalResult(
-                    parsed=parsed_info,
-                    specs=specs,
-                    early_response=msg,
-                    validation=validation_result,
-                )
+                if not validation_result["is_valid"]:
+                    suggestion = validation_result.get("suggestions", "")
+                    errors = validation_result.get("validation_errors", [])
+                    error_msg = errors[0] if errors else "Invalid vehicle combination"
+                    msg = f"**Vehicle Not Found**\n\n{error_msg}"
+                    if suggestion:
+                        msg += f"\n\n{suggestion}"
+
+                    return RetrievalResult(
+                        parsed=parsed_info,
+                        specs=specs,
+                        early_response=msg,
+                        validation=validation_result,
+                    )
 
         # Step 4: Get community fitments + Kansei wheels
         try:
@@ -552,25 +581,28 @@ class FitmentPipeline(dspy.Module):
                 year_start = parsed.get("year")
                 year_end = parsed.get("year")
 
-                db.save_vehicle_specs(
-                    year_start=year_start,
-                    year_end=year_end,
-                    make=parsed["make"],
-                    model=parsed.get("model") or "Unknown",
-                    chassis_code=parsed.get("chassis_code"),
-                    bolt_pattern=web_result["bolt_pattern"],
-                    center_bore=web_result["center_bore"],
-                    stud_size=web_result.get("stud_size"),
-                    min_diameter=web_result.get("min_diameter", 15),
-                    max_diameter=web_result.get("max_diameter", 20),
-                    min_width=web_result.get("min_width", 6.0),
-                    max_width=web_result.get("max_width", 10.0),
-                    min_offset=web_result.get("min_offset", -10),
-                    max_offset=web_result.get("max_offset", 50),
-                    source="web_search",
-                    source_url=web_result.get("source_url"),
-                    confidence=web_result.get("confidence", 0.8),
-                )
+                try:
+                    db.save_vehicle_specs(
+                        year_start=year_start,
+                        year_end=year_end,
+                        make=parsed["make"],
+                        model=parsed.get("model") or "Unknown",
+                        chassis_code=parsed.get("chassis_code"),
+                        bolt_pattern=web_result["bolt_pattern"],
+                        center_bore=web_result["center_bore"],
+                        stud_size=web_result.get("stud_size"),
+                        min_diameter=web_result.get("min_diameter", 15),
+                        max_diameter=web_result.get("max_diameter", 20),
+                        min_width=web_result.get("min_width", 6.0),
+                        max_width=web_result.get("max_width", 10.0),
+                        min_offset=web_result.get("min_offset", -10),
+                        max_offset=web_result.get("max_offset", 50),
+                        source=web_result.get("source", "web_search"),
+                        source_url=web_result.get("source_url"),
+                        confidence=web_result.get("confidence", 0.8),
+                    )
+                except Exception:
+                    pass  # Don't block retrieval if DB save fails
 
                 return {
                     "bolt_pattern": web_result["bolt_pattern"],
@@ -582,7 +614,7 @@ class FitmentPipeline(dspy.Module):
                     "max_width": web_result.get("max_width", 10.0),
                     "min_offset": web_result.get("min_offset", -10),
                     "max_offset": web_result.get("max_offset", 50),
-                    "source": "web_search",
+                    "source": web_result.get("source", "web_search"),
                     "confidence": web_result.get("confidence", 0.8),
                 }
 
