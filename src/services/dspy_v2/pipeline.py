@@ -345,6 +345,12 @@ class FitmentPipeline(dspy.Module):
 
         parsed_info = self._extract_parsed(parsed)
 
+        # Merge trim into model for accurate lookups (e.g. "Civic" + "Type R" → "Civic Type R")
+        _trim = parsed_info.get("trim")
+        _model = parsed_info.get("model") or ""
+        if _trim and _trim.lower() not in _model.lower():
+            parsed_info["model"] = f"{_model} {_trim}".strip()
+
         # Step 2: Resolve vehicle specs (DB first, then web scrape)
         specs = self._resolve_specs(parsed_info)
 
@@ -548,13 +554,15 @@ class FitmentPipeline(dspy.Module):
 
     def _resolve_specs(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve vehicle specs from DB or web search."""
+        model = parsed.get("model") or ""
+
         # Try DB first
         db_specs = None
         try:
             db_specs = db.find_vehicle_specs(
                 year=parsed.get("year"),
                 make=parsed.get("make"),
-                model=parsed.get("model"),
+                model=model,
                 chassis_code=parsed.get("chassis_code"),
             )
         except Exception:
@@ -568,7 +576,7 @@ class FitmentPipeline(dspy.Module):
             web_result = search_vehicle_specs_web(
                 year=parsed.get("year"),
                 make=parsed["make"],
-                model=parsed.get("model") or "",
+                model=model,
                 chassis_code=parsed.get("chassis_code"),
             )
 
@@ -586,7 +594,7 @@ class FitmentPipeline(dspy.Module):
                         year_start=year_start,
                         year_end=year_end,
                         make=parsed["make"],
-                        model=parsed.get("model") or "Unknown",
+                        model=model or "Unknown",
                         chassis_code=parsed.get("chassis_code"),
                         bolt_pattern=web_result["bolt_pattern"],
                         center_bore=web_result["center_bore"],

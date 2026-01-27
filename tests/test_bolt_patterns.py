@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Test 50 vehicles with validated bolt patterns."""
+"""Test 50 vehicles with validated bolt patterns.
 
-from src.chat.context import set_dspy_assistant, validate_vehicle_specs
-from src.services.dspy_fitment import create_fitment_assistant
+Uses the knowledge base lookup from the DSPy v2 pipeline tools
+to verify bolt patterns for known vehicles.
+"""
+
+from src.services.dspy_v2.tools import search_vehicle_specs_web
 
 # 50 vehicles with known correct bolt patterns
 VEHICLES = [
@@ -72,10 +75,6 @@ VEHICLES = [
 
 
 def main():
-    # Initialize DSPy assistant for vehicle validation
-    assistant = create_fitment_assistant("openai/gpt-4o")
-    set_dspy_assistant(assistant)
-
     passed = 0
     failed = 0
     failures = []
@@ -84,7 +83,9 @@ def main():
     print("=" * 70)
 
     for make, year, model, expected in VEHICLES:
-        specs = validate_vehicle_specs(year, make, model, trim=None)
+        specs = search_vehicle_specs_web(
+            year=year, make=make, model=model, chassis_code=None
+        )
         result = specs.get("bolt_pattern", "Unknown")
         match = result.upper() == expected.upper()
 

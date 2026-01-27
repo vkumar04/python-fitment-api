@@ -138,6 +138,24 @@ def _oem_to_pipeline_specs(oem: OEMSpecs) -> dict[str, Any]:
     }
 
 
+def _resolve_bmw_chassis(
+    model_lower: str,
+    year: int | None,
+    mapping: dict[str, list[tuple[tuple[int, int], str]]],
+) -> str | None:
+    """Resolve a BMW model + year to a chassis code."""
+    entries = mapping.get(model_lower)
+    if not entries:
+        return None
+
+    if year:
+        for (y_start, y_end), chassis in entries:
+            if y_start <= year <= y_end:
+                return chassis
+    # No year — return the latest chassis code
+    return entries[-1][1]
+
+
 def _lookup_known_specs(
     make: str,
     model: str,
@@ -152,8 +170,33 @@ def _lookup_known_specs(
     model_lower = model.lower()
     chassis_upper = chassis_code.upper() if chassis_code else None
 
-    # BMW specs by chassis code
+    # BMW specs by chassis code (5x120 unless noted)
+    _bmw_5x120 = {
+        "bolt_pattern": "5x120",
+        "center_bore": 72.6,
+        "stud_size": "M12x1.5",
+    }
+    _bmw_5x112 = {
+        "bolt_pattern": "5x112",
+        "center_bore": 66.5,
+        "stud_size": "M14x1.25",
+    }
     bmw_specs = {
+        # 4x100 era
+        "E21": {
+            "bolt_pattern": "4x100",
+            "center_bore": 57.1,
+            "stud_size": "M12x1.5",
+            "oem_diameter": 13,
+            "min_diameter": 13,
+            "max_diameter": 15,
+            "oem_width": 5.5,
+            "min_width": 5.5,
+            "max_width": 7.0,
+            "oem_offset": 22,
+            "min_offset": 10,
+            "max_offset": 35,
+        },
         "E30": {
             "bolt_pattern": "4x100",
             "center_bore": 57.1,
@@ -168,10 +211,45 @@ def _lookup_known_specs(
             "min_offset": 10,
             "max_offset": 42,
         },
+        # 5x120 era — classic
+        "E24": {
+            **_bmw_5x120,
+            "oem_diameter": 14,
+            "min_diameter": 14,
+            "max_diameter": 17,
+            "oem_width": 6.5,
+            "min_width": 6.5,
+            "max_width": 9.0,
+            "oem_offset": 23,
+            "min_offset": 5,
+            "max_offset": 35,
+        },
+        "E28": {
+            **_bmw_5x120,
+            "oem_diameter": 14,
+            "min_diameter": 14,
+            "max_diameter": 17,
+            "oem_width": 6.5,
+            "min_width": 6.5,
+            "max_width": 9.0,
+            "oem_offset": 23,
+            "min_offset": 5,
+            "max_offset": 35,
+        },
+        "E34": {
+            **_bmw_5x120,
+            "oem_diameter": 15,
+            "min_diameter": 15,
+            "max_diameter": 18,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.5,
+            "oem_offset": 20,
+            "min_offset": 5,
+            "max_offset": 35,
+        },
         "E36": {
-            "bolt_pattern": "5x120",
-            "center_bore": 72.6,
-            "stud_size": "M12x1.5",
+            **_bmw_5x120,
             "oem_diameter": 15,
             "min_diameter": 15,
             "max_diameter": 18,
@@ -182,24 +260,20 @@ def _lookup_known_specs(
             "min_offset": 15,
             "max_offset": 45,
         },
-        "E46": {
-            "bolt_pattern": "5x120",
-            "center_bore": 72.6,
-            "stud_size": "M12x1.5",
+        "E38": {
+            **_bmw_5x120,
             "oem_diameter": 16,
             "min_diameter": 16,
-            "max_diameter": 19,
-            "oem_width": 7.0,
+            "max_diameter": 20,
+            "oem_width": 7.5,
             "min_width": 7.0,
-            "max_width": 9.5,
-            "oem_offset": 42,
-            "min_offset": 15,
-            "max_offset": 47,
+            "max_width": 10.0,
+            "oem_offset": 24,
+            "min_offset": 5,
+            "max_offset": 35,
         },
         "E39": {
-            "bolt_pattern": "5x120",
-            "center_bore": 72.6,
-            "stud_size": "M12x1.5",
+            **_bmw_5x120,
             "oem_diameter": 16,
             "min_diameter": 16,
             "max_diameter": 19,
@@ -210,10 +284,56 @@ def _lookup_known_specs(
             "min_offset": 5,
             "max_offset": 35,
         },
+        "E46": {
+            **_bmw_5x120,
+            "oem_diameter": 16,
+            "min_diameter": 16,
+            "max_diameter": 19,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.5,
+            "oem_offset": 42,
+            "min_offset": 15,
+            "max_offset": 47,
+        },
+        "E60": {
+            **_bmw_5x120,
+            "oem_diameter": 17,
+            "min_diameter": 17,
+            "max_diameter": 20,
+            "oem_width": 7.5,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 20,
+            "min_offset": 5,
+            "max_offset": 35,
+        },
+        "E82": {
+            **_bmw_5x120,
+            "oem_diameter": 16,
+            "min_diameter": 16,
+            "max_diameter": 19,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.5,
+            "oem_offset": 34,
+            "min_offset": 15,
+            "max_offset": 45,
+        },
         "E90": {
-            "bolt_pattern": "5x120",
-            "center_bore": 72.6,
-            "stud_size": "M12x1.5",
+            **_bmw_5x120,
+            "oem_diameter": 17,
+            "min_diameter": 17,
+            "max_diameter": 19,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 34,
+            "min_offset": 15,
+            "max_offset": 45,
+        },
+        "E92": {
+            **_bmw_5x120,
             "oem_diameter": 17,
             "min_diameter": 17,
             "max_diameter": 19,
@@ -225,9 +345,7 @@ def _lookup_known_specs(
             "max_offset": 45,
         },
         "F30": {
-            "bolt_pattern": "5x120",
-            "center_bore": 72.6,
-            "stud_size": "M12x1.5",
+            **_bmw_5x120,
             "oem_diameter": 18,
             "min_diameter": 17,
             "max_diameter": 20,
@@ -238,10 +356,45 @@ def _lookup_known_specs(
             "min_offset": 15,
             "max_offset": 45,
         },
+        "F32": {
+            **_bmw_5x120,
+            "oem_diameter": 18,
+            "min_diameter": 17,
+            "max_diameter": 20,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.5,
+            "oem_offset": 34,
+            "min_offset": 15,
+            "max_offset": 45,
+        },
+        "F80": {
+            **_bmw_5x120,
+            "oem_diameter": 18,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 9.0,
+            "min_width": 8.5,
+            "max_width": 10.5,
+            "oem_offset": 29,
+            "min_offset": 15,
+            "max_offset": 40,
+        },
+        "F82": {
+            **_bmw_5x120,
+            "oem_diameter": 18,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 9.0,
+            "min_width": 8.5,
+            "max_width": 10.5,
+            "oem_offset": 29,
+            "min_offset": 15,
+            "max_offset": 40,
+        },
+        # 5x112 era (G-series, 2019+)
         "G20": {
-            "bolt_pattern": "5x112",
-            "center_bore": 66.5,
-            "stud_size": "M14x1.25",
+            **_bmw_5x112,
             "oem_diameter": 18,
             "min_diameter": 17,
             "max_diameter": 20,
@@ -252,42 +405,166 @@ def _lookup_known_specs(
             "min_offset": 15,
             "max_offset": 40,
         },
+        "G80": {
+            **_bmw_5x112,
+            "oem_diameter": 18,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 9.0,
+            "min_width": 8.5,
+            "max_width": 10.5,
+            "oem_offset": 26,
+            "min_offset": 15,
+            "max_offset": 38,
+        },
+        "G82": {
+            **_bmw_5x112,
+            "oem_diameter": 18,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 9.0,
+            "min_width": 8.5,
+            "max_width": 10.5,
+            "oem_offset": 26,
+            "min_offset": 15,
+            "max_offset": 38,
+        },
+    }
+
+    # BMW model → chassis code mapping (for queries without explicit chassis code)
+    _bmw_model_to_chassis: dict[str, list[tuple[tuple[int, int], str]]] = {
+        # model_lower: [(year_range, chassis_code), ...]
+        "m3": [
+            ((1986, 1991), "E30"),
+            ((1992, 1999), "E36"),
+            ((2000, 2006), "E46"),
+            ((2007, 2013), "E90"),
+            ((2014, 2018), "F80"),
+            ((2019, 2030), "G80"),
+        ],
+        "m4": [
+            ((2014, 2020), "F82"),
+            ((2021, 2030), "G82"),
+        ],
+        "m5": [
+            ((1984, 1988), "E28"),
+            ((1988, 1995), "E34"),
+            ((1998, 2003), "E39"),
+            ((2004, 2010), "E60"),
+        ],
+        "m6": [
+            ((1983, 1989), "E24"),
+        ],
+        "635csi": [((1976, 1989), "E24")],
+        "325i": [
+            ((1982, 1991), "E30"),
+            ((1992, 1998), "E36"),
+            ((1999, 2006), "E46"),
+            ((2007, 2013), "E90"),
+        ],
+        "328i": [
+            ((1992, 1998), "E36"),
+            ((1999, 2006), "E46"),
+            ((2007, 2013), "E90"),
+            ((2012, 2018), "F30"),
+        ],
+        "330i": [
+            ((1999, 2006), "E46"),
+            ((2007, 2013), "E90"),
+            ((2012, 2018), "F30"),
+            ((2019, 2030), "G20"),
+        ],
+        "335i": [
+            ((2007, 2013), "E90"),
+            ((2012, 2015), "F30"),
+        ],
+        "340i": [
+            ((2016, 2018), "F30"),
+            ((2019, 2030), "G20"),
+        ],
+        "m340i": [((2019, 2030), "G20")],
+        "535i": [
+            ((1988, 1995), "E34"),
+            ((1996, 2003), "E39"),
+            ((2004, 2010), "E60"),
+        ],
+        "540i": [
+            ((1996, 2003), "E39"),
+            ((2004, 2010), "E60"),
+        ],
+        "528i": [
+            ((1996, 2003), "E39"),
+        ],
+        "1 series": [((2004, 2013), "E82")],
+        "128i": [((2008, 2013), "E82")],
+        "135i": [((2008, 2013), "E82")],
+        "3 series": [
+            ((1982, 1991), "E30"),
+            ((1992, 1999), "E36"),
+            ((2000, 2006), "E46"),
+            ((2007, 2013), "E90"),
+            ((2012, 2018), "F30"),
+            ((2019, 2030), "G20"),
+        ],
+        "4 series": [
+            ((2014, 2020), "F32"),
+        ],
+        "5 series": [
+            ((1981, 1988), "E28"),
+            ((1988, 1995), "E34"),
+            ((1996, 2003), "E39"),
+            ((2004, 2010), "E60"),
+        ],
+        "6 series": [
+            ((1976, 1989), "E24"),
+        ],
+        "7 series": [
+            ((1994, 2001), "E38"),
+        ],
+        "740i": [((1994, 2001), "E38")],
+        "750i": [((1994, 2001), "E38")],
     }
 
     # Check BMW by chassis code first
     if make_lower == "bmw" and chassis_upper and chassis_upper in bmw_specs:
         return bmw_specs[chassis_upper]
 
-    # Honda specs
+    # Check BMW by model + year (resolve to chassis code)
+    if make_lower == "bmw" and not chassis_upper:
+        chassis = _resolve_bmw_chassis(model_lower, year, _bmw_model_to_chassis)
+        if chassis and chassis in bmw_specs:
+            return bmw_specs[chassis]
+
+    # Honda specs — year-aware
+    _honda_4x100 = {
+        "bolt_pattern": "4x100",
+        "center_bore": 56.1,
+        "stud_size": "M12x1.5",
+        "oem_diameter": 14,
+        "min_diameter": 14,
+        "max_diameter": 17,
+        "oem_width": 5.5,
+        "min_width": 6.0,
+        "max_width": 8.0,
+        "oem_offset": 45,
+        "min_offset": 25,
+        "max_offset": 50,
+    }
+    _honda_5x114 = {
+        "bolt_pattern": "5x114.3",
+        "center_bore": 64.1,
+        "stud_size": "M12x1.5",
+        "oem_diameter": 16,
+        "min_diameter": 16,
+        "max_diameter": 19,
+        "oem_width": 7.0,
+        "min_width": 7.0,
+        "max_width": 9.5,
+        "oem_offset": 45,
+        "min_offset": 30,
+        "max_offset": 50,
+    }
     honda_specs = {
-        ("civic", "eg"): {
-            "bolt_pattern": "4x100",
-            "center_bore": 56.1,
-            "stud_size": "M12x1.5",
-            "oem_diameter": 14,
-            "min_diameter": 14,
-            "max_diameter": 17,
-            "oem_width": 5.5,
-            "min_width": 6.0,
-            "max_width": 8.0,
-            "oem_offset": 45,
-            "min_offset": 25,
-            "max_offset": 50,
-        },
-        ("civic", "ek"): {
-            "bolt_pattern": "4x100",
-            "center_bore": 56.1,
-            "stud_size": "M12x1.5",
-            "oem_diameter": 14,
-            "min_diameter": 14,
-            "max_diameter": 17,
-            "oem_width": 5.5,
-            "min_width": 6.0,
-            "max_width": 8.0,
-            "oem_offset": 45,
-            "min_offset": 25,
-            "max_offset": 50,
-        },
         ("civic type r", "fk8"): {
             "bolt_pattern": "5x120",
             "center_bore": 64.1,
@@ -302,28 +579,64 @@ def _lookup_known_specs(
             "min_offset": 35,
             "max_offset": 50,
         },
-        ("civic", None): {  # Generic modern Civic
+        ("s2000", None): {
             "bolt_pattern": "5x114.3",
             "center_bore": 64.1,
             "stud_size": "M12x1.5",
             "oem_diameter": 16,
             "min_diameter": 16,
-            "max_diameter": 19,
-            "oem_width": 7.0,
+            "max_diameter": 18,
+            "oem_width": 6.5,
             "min_width": 7.0,
-            "max_width": 9.5,
-            "oem_offset": 45,
-            "min_offset": 30,
-            "max_offset": 50,
+            "max_width": 9.0,
+            "oem_offset": 55,
+            "min_offset": 25,
+            "max_offset": 55,
         },
+        ("accord", None): _honda_5x114,
     }
 
-    if make_lower == "honda":
-        # Try specific chassis match first
+    if make_lower in ("honda", "acura"):
+        # Try specific chassis/model match first
         for (m, c), specs in honda_specs.items():
             if model_lower in m or m in model_lower:
-                if c is None or (chassis_upper and c.upper() == chassis_upper):
+                # Match if: no chassis required, chassis matches, or model name is specific enough
+                if c is None or (chassis_upper and c.upper() == chassis_upper) or m == model_lower:
                     return specs
+
+        # Civic year-based lookup (4x100 before 2006, 5x114.3 after)
+        if "civic" in model_lower and "type r" not in model_lower:
+            if year and year <= 2005:
+                return _honda_4x100
+            return _honda_5x114
+
+        # Prelude year-based lookup
+        if "prelude" in model_lower:
+            if year and year <= 1991:
+                return {**_honda_4x100, "oem_diameter": 14, "max_diameter": 16}
+            if year and year <= 1996:
+                return {
+                    "bolt_pattern": "4x114.3",
+                    "center_bore": 64.1,
+                    "stud_size": "M12x1.5",
+                    "oem_diameter": 15,
+                    "min_diameter": 15,
+                    "max_diameter": 17,
+                    "oem_width": 6.0,
+                    "min_width": 6.0,
+                    "max_width": 8.0,
+                    "oem_offset": 45,
+                    "min_offset": 25,
+                    "max_offset": 50,
+                }
+            if year and year >= 1997:
+                return _honda_5x114
+            # No year — can't determine
+            return None
+
+        # Acura / other Honda models default to 5x114.3
+        if make_lower == "acura":
+            return _honda_5x114
 
     # Subaru specs
     subaru_specs = {
@@ -407,6 +720,20 @@ def _lookup_known_specs(
             "min_offset": 30,
             "max_offset": 55,
         },
+        ("supra", "a80"): {
+            "bolt_pattern": "5x114.3",
+            "center_bore": 60.1,
+            "stud_size": "M12x1.5",
+            "oem_diameter": 17,
+            "min_diameter": 17,
+            "max_diameter": 19,
+            "oem_width": 8.0,
+            "min_width": 8.0,
+            "max_width": 10.0,
+            "oem_offset": 40,
+            "min_offset": 15,
+            "max_offset": 50,
+        },
         ("supra", "a90"): {
             "bolt_pattern": "5x112",
             "center_bore": 66.5,
@@ -421,6 +748,34 @@ def _lookup_known_specs(
             "min_offset": 15,
             "max_offset": 40,
         },
+        ("camry", None): {
+            "bolt_pattern": "5x114.3",
+            "center_bore": 60.1,
+            "stud_size": "M12x1.5",
+            "oem_diameter": 17,
+            "min_diameter": 16,
+            "max_diameter": 19,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.0,
+            "oem_offset": 40,
+            "min_offset": 25,
+            "max_offset": 50,
+        },
+        ("tacoma", None): {
+            "bolt_pattern": "6x139.7",
+            "center_bore": 106.1,
+            "stud_size": "M12x1.5",
+            "oem_diameter": 16,
+            "min_diameter": 16,
+            "max_diameter": 18,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.0,
+            "oem_offset": 30,
+            "min_offset": -10,
+            "max_offset": 40,
+        },
     }
 
     if make_lower in ("toyota", "scion"):
@@ -428,6 +783,12 @@ def _lookup_known_specs(
             if model_lower in m or m in model_lower:
                 if c is None or (chassis_upper and c.upper() == chassis_upper):
                     return specs
+        # Supra year-based: A80 (1993-2002) vs A90 (2019+)
+        if "supra" in model_lower:
+            if year and year <= 2002:
+                return toyota_specs[("supra", "a80")]
+            if year and year >= 2019:
+                return toyota_specs[("supra", "a90")]
 
     # Nissan specs
     nissan_specs = {
@@ -560,6 +921,296 @@ def _lookup_known_specs(
             if model_lower in m or m in model_lower:
                 if c is None or (chassis_upper and c.upper() == chassis_upper):
                     return specs
+        # Miata/MX-5 year-based: NA (1990-1997), NB (1999-2005), NC (2006-2015), ND (2016+)
+        if "miata" in model_lower or "mx-5" in model_lower or "mx5" in model_lower:
+            if year and year <= 1997:
+                return miata_specs[("miata", "na")]
+            if year and year <= 2005:
+                return miata_specs[("miata", "nb")]
+            if year and year <= 2015:
+                return miata_specs[("mx-5", "nc")]
+            return miata_specs[("mx-5", "nd")]
+
+    # Mitsubishi specs
+    if make_lower == "mitsubishi":
+        if "evo" in model_lower or "lancer" in model_lower:
+            return {
+                "bolt_pattern": "5x114.3",
+                "center_bore": 67.1,
+                "stud_size": "M12x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 19,
+                "oem_width": 8.5,
+                "min_width": 8.0,
+                "max_width": 10.0,
+                "oem_offset": 38,
+                "min_offset": 15,
+                "max_offset": 45,
+            }
+
+    # Volkswagen specs
+    _vw_5x112 = {
+        "bolt_pattern": "5x112",
+        "center_bore": 57.1,
+        "stud_size": "M14x1.5",
+        "oem_diameter": 18,
+        "min_diameter": 17,
+        "max_diameter": 19,
+        "oem_width": 7.5,
+        "min_width": 7.0,
+        "max_width": 9.5,
+        "oem_offset": 45,
+        "min_offset": 30,
+        "max_offset": 50,
+    }
+    if make_lower in ("volkswagen", "vw"):
+        return _vw_5x112
+
+    # Audi specs
+    if make_lower == "audi":
+        return {
+            "bolt_pattern": "5x112",
+            "center_bore": 66.5,
+            "stud_size": "M14x1.5",
+            "oem_diameter": 18,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 35,
+            "min_offset": 20,
+            "max_offset": 45,
+        }
+
+    # Mercedes-Benz specs
+    if make_lower in ("mercedes-benz", "mercedes"):
+        return {
+            "bolt_pattern": "5x112",
+            "center_bore": 66.6,
+            "stud_size": "M14x1.5",
+            "oem_diameter": 18,
+            "min_diameter": 17,
+            "max_diameter": 20,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 43,
+            "min_offset": 25,
+            "max_offset": 50,
+        }
+
+    # Porsche specs
+    if make_lower == "porsche":
+        return {
+            "bolt_pattern": "5x130",
+            "center_bore": 71.6,
+            "stud_size": "M14x1.5",
+            "oem_diameter": 19,
+            "min_diameter": 18,
+            "max_diameter": 21,
+            "oem_width": 8.5,
+            "min_width": 8.0,
+            "max_width": 11.0,
+            "oem_offset": 50,
+            "min_offset": 30,
+            "max_offset": 60,
+        }
+
+    # American trucks / muscle cars
+    if make_lower == "ford":
+        if "f-150" in model_lower or "f150" in model_lower:
+            return {
+                "bolt_pattern": "6x135",
+                "center_bore": 87.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 7.5,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 44,
+                "min_offset": -12,
+                "max_offset": 50,
+            }
+        if "mustang" in model_lower:
+            return {
+                "bolt_pattern": "5x114.3",
+                "center_bore": 70.5,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 20,
+                "oem_width": 8.5,
+                "min_width": 8.0,
+                "max_width": 11.0,
+                "oem_offset": 45,
+                "min_offset": 20,
+                "max_offset": 55,
+            }
+        if "focus" in model_lower:
+            return {
+                "bolt_pattern": "5x108",
+                "center_bore": 63.4,
+                "stud_size": "M12x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 19,
+                "oem_width": 7.5,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 50,
+                "min_offset": 35,
+                "max_offset": 55,
+            }
+
+    if make_lower in ("chevrolet", "chevy"):
+        if "silverado" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 78.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 7.5,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 28,
+                "min_offset": -12,
+                "max_offset": 44,
+            }
+        if "camaro" in model_lower:
+            return {
+                "bolt_pattern": "5x120",
+                "center_bore": 67.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 18,
+                "max_diameter": 20,
+                "oem_width": 8.5,
+                "min_width": 8.0,
+                "max_width": 11.0,
+                "oem_offset": 35,
+                "min_offset": 15,
+                "max_offset": 45,
+            }
+        if "corvette" in model_lower:
+            return {
+                "bolt_pattern": "5x120",
+                "center_bore": 70.3,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 19,
+                "min_diameter": 18,
+                "max_diameter": 21,
+                "oem_width": 8.5,
+                "min_width": 8.5,
+                "max_width": 12.0,
+                "oem_offset": 30,
+                "min_offset": 15,
+                "max_offset": 50,
+            }
+
+    if make_lower == "dodge":
+        if "challenger" in model_lower or "charger" in model_lower:
+            return {
+                "bolt_pattern": "5x115",
+                "center_bore": 71.5,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 18,
+                "max_diameter": 22,
+                "oem_width": 7.5,
+                "min_width": 7.5,
+                "max_width": 11.0,
+                "oem_offset": 20,
+                "min_offset": 5,
+                "max_offset": 35,
+            }
+
+    if make_lower == "ram":
+        return {
+            "bolt_pattern": "6x139.7",
+            "center_bore": 77.8,
+            "stud_size": "M14x1.5",
+            "oem_diameter": 18,
+            "min_diameter": 17,
+            "max_diameter": 22,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 25,
+            "min_offset": -12,
+            "max_offset": 44,
+        }
+
+    # Tesla specs
+    if make_lower == "tesla":
+        if "model 3" in model_lower or "model3" in model_lower:
+            return {
+                "bolt_pattern": "5x114.3",
+                "center_bore": 64.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 18,
+                "max_diameter": 20,
+                "oem_width": 8.5,
+                "min_width": 8.0,
+                "max_width": 10.0,
+                "oem_offset": 35,
+                "min_offset": 20,
+                "max_offset": 45,
+            }
+        if "model s" in model_lower or "models" in model_lower:
+            return {
+                "bolt_pattern": "5x120",
+                "center_bore": 64.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 19,
+                "min_diameter": 19,
+                "max_diameter": 21,
+                "oem_width": 8.5,
+                "min_width": 8.5,
+                "max_width": 10.5,
+                "oem_offset": 40,
+                "min_offset": 25,
+                "max_offset": 50,
+            }
+        if "model y" in model_lower or "modely" in model_lower:
+            return {
+                "bolt_pattern": "5x114.3",
+                "center_bore": 64.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 19,
+                "min_diameter": 18,
+                "max_diameter": 21,
+                "oem_width": 9.5,
+                "min_width": 8.5,
+                "max_width": 10.5,
+                "oem_offset": 35,
+                "min_offset": 20,
+                "max_offset": 45,
+            }
+
+    # Datsun / Nissan classics
+    if make_lower == "datsun":
+        if "240z" in model_lower or "260z" in model_lower or "280z" in model_lower:
+            return {
+                "bolt_pattern": "4x114.3",
+                "center_bore": 66.1,
+                "stud_size": "M12x1.25",
+                "oem_diameter": 14,
+                "min_diameter": 14,
+                "max_diameter": 16,
+                "oem_width": 5.5,
+                "min_width": 6.0,
+                "max_width": 8.0,
+                "oem_offset": 0,
+                "min_offset": -10,
+                "max_offset": 20,
+            }
 
     return None
 
@@ -573,8 +1224,8 @@ def validate_bolt_pattern(pattern: str) -> bool:
 
 def validate_center_bore(bore: float) -> bool:
     """Validate that center bore is within reasonable range."""
-    # Most cars are between 50mm and 80mm
-    return 45.0 <= bore <= 85.0
+    # Cars 50-80mm, trucks/SUVs up to 110mm
+    return 45.0 <= bore <= 115.0
 
 
 def validate_offset(offset: int) -> bool:

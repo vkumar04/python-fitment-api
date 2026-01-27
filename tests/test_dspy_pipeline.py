@@ -91,12 +91,11 @@ class TestParseVehicleInput:
 class TestToolsLookup:
     """Test the web search tools."""
 
-    @pytest.mark.asyncio
-    async def test_lookup_bmw_specs(self):
+    def test_lookup_bmw_specs(self):
         """Test looking up BMW E30 specs."""
         from src.services.dspy_v2.tools import search_vehicle_specs_web
 
-        result = await search_vehicle_specs_web(
+        result = search_vehicle_specs_web(
             year=1989, make="BMW", model="M3", chassis_code="E30"
         )
 
@@ -104,12 +103,11 @@ class TestToolsLookup:
         assert result["bolt_pattern"] == "4x100"
         assert result["center_bore"] == 57.1
 
-    @pytest.mark.asyncio
-    async def test_lookup_honda_specs(self):
+    def test_lookup_honda_specs(self):
         """Test looking up Honda Civic specs."""
         from src.services.dspy_v2.tools import search_vehicle_specs_web
 
-        result = await search_vehicle_specs_web(
+        result = search_vehicle_specs_web(
             year=2020, make="Honda", model="Civic", chassis_code=None
         )
 
@@ -120,13 +118,12 @@ class TestToolsLookup:
 class TestFullPipeline:
     """Integration tests for the full pipeline."""
 
-    @pytest.mark.asyncio
-    async def test_pipeline_basic_query(self):
+    def test_pipeline_basic_query(self):
         """Test the full pipeline with a basic query."""
         from src.services.dspy_v2 import create_pipeline
 
         pipeline = create_pipeline(model="openai/gpt-4o-mini")
-        result = await pipeline.forward("E30 M3")
+        result = pipeline.forward("E30 M3")
 
         # Check we got a response
         assert result.response is not None
@@ -141,13 +138,12 @@ class TestFullPipeline:
         assert result.specs is not None
         assert result.specs.get("bolt_pattern") == "4x100"
 
-    @pytest.mark.asyncio
-    async def test_pipeline_invalid_vehicle(self):
+    def test_pipeline_invalid_vehicle(self):
         """Test pipeline handles invalid vehicle gracefully."""
         from src.services.dspy_v2 import create_pipeline
 
         pipeline = create_pipeline(model="openai/gpt-4o-mini")
-        result = await pipeline.forward("E30 M5")  # E30 M5 doesn't exist
+        result = pipeline.forward("E30 M5")  # E30 M5 doesn't exist
 
         # Should still get a response
         assert result.response is not None
@@ -161,13 +157,15 @@ class TestFullPipeline:
 class TestRAGService:
     """Test the refactored RAG service."""
 
-    @pytest.mark.asyncio
-    async def test_ask_method(self):
+    def test_ask_method(self):
         """Test the ask method returns proper structure."""
         from src.services.rag_service import RAGService
 
-        service = RAGService(model="openai/gpt-4o-mini")
-        result = await service.ask("2020 Honda Civic")
+        async def _run():
+            service = RAGService(model="openai/gpt-4o-mini")
+            return await service.ask("2020 Honda Civic")
+
+        result = asyncio.run(_run())
 
         assert "response" in result
         assert "parsed" in result
@@ -181,5 +179,9 @@ class TestRAGService:
 
 if __name__ == "__main__":
     # Run a quick test
-    asyncio.run(TestFullPipeline().test_pipeline_basic_query())
+    from src.services.dspy_v2 import create_pipeline
+
+    pipeline = create_pipeline(model="openai/gpt-4o-mini")
+    result = pipeline.forward("E30 M3")
+    print(f"Response: {result.response[:100]}...")
     print("Pipeline test passed!")
