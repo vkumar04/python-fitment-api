@@ -2,6 +2,7 @@
 
 import json
 import re
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ class WheelSizeLookup:
     CACHE_FILE = Path("datafiles/wheel_size_cache.json")
 
     def __init__(self) -> None:
+        self._lock = threading.Lock()
         self.client = httpx.Client(
             headers={
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -97,40 +99,45 @@ class WheelSizeLookup:
         return model.replace(" ", "-").replace("_", "-")
 
     def lookup(self, year: int, make: str, model: str) -> OEMSpecs | None:
-        """
-        Look up OEM specs for a vehicle.
+        """Look up OEM specs for a vehicle (thread-safe).
+
         Checks cache first, then fetches from wheel-size.com if needed.
+        The fetch happens outside the lock so slow scrapes don't block
+        other threads from reading cached results.
         """
         cache_key = self._cache_key(year, make, model)
 
-        # Check cache
-        if cache_key in self.cache:
-            data = self.cache[cache_key]
-            if data is None:
-                return None
-            return OEMSpecs(**data)
+        # Check cache (under lock)
+        with self._lock:
+            if cache_key in self.cache:
+                data = self.cache[cache_key]
+                if data is None:
+                    return None
+                return OEMSpecs(**data)
 
-        # Fetch from wheel-size.com
+        # Fetch from wheel-size.com (outside lock — may be slow)
         specs = self._fetch_specs(year, make, model)
 
-        # Cache result (even if None, to avoid re-fetching)
-        if specs:
-            self.cache[cache_key] = {
-                "year": specs.year,
-                "make": specs.make,
-                "model": specs.model,
-                "bolt_pattern": specs.bolt_pattern,
-                "center_bore": specs.center_bore,
-                "oem_offset_min": specs.oem_offset_min,
-                "oem_offset_max": specs.oem_offset_max,
-                "oem_wheel_sizes": specs.oem_wheel_sizes,
-                "oem_tire_sizes": specs.oem_tire_sizes,
-                "stud_size": specs.stud_size,
-            }
-        else:
-            self.cache[cache_key] = None
+        # Cache result under lock (double-check another thread didn't populate)
+        with self._lock:
+            if cache_key not in self.cache:
+                if specs:
+                    self.cache[cache_key] = {
+                        "year": specs.year,
+                        "make": specs.make,
+                        "model": specs.model,
+                        "bolt_pattern": specs.bolt_pattern,
+                        "center_bore": specs.center_bore,
+                        "oem_offset_min": specs.oem_offset_min,
+                        "oem_offset_max": specs.oem_offset_max,
+                        "oem_wheel_sizes": specs.oem_wheel_sizes,
+                        "oem_tire_sizes": specs.oem_tire_sizes,
+                        "stud_size": specs.stud_size,
+                    }
+                else:
+                    self.cache[cache_key] = None
+                self._save_cache()
 
-        self._save_cache()
         return specs
 
     def _fetch_specs(self, year: int, make: str, model: str) -> OEMSpecs | None:
@@ -289,13 +296,16 @@ class WheelSizeLookup:
         self.client.close()
 
 
-# Singleton instance
+# Singleton instance (thread-safe)
 _lookup_instance: WheelSizeLookup | None = None
+_lookup_lock = threading.Lock()
 
 
 def get_wheel_size_lookup() -> WheelSizeLookup:
-    """Get or create the singleton lookup instance."""
+    """Get or create the singleton lookup instance (thread-safe)."""
     global _lookup_instance
     if _lookup_instance is None:
-        _lookup_instance = WheelSizeLookup()
+        with _lookup_lock:
+            if _lookup_instance is None:
+                _lookup_instance = WheelSizeLookup()
     return _lookup_instance
