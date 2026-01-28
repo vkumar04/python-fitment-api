@@ -7,6 +7,7 @@ Flow:
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -44,6 +45,79 @@ class RAGService:
             settings = get_settings()
             self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
         return self._openai_client
+
+    # -------------------------------------------------------------------------
+    # Conversation Context
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _has_vehicle_info(text: str) -> bool:
+        """Check if text contains vehicle identifiers (year, make, or chassis code)."""
+        text_lower = text.lower()
+        words = set(text_lower.split())
+
+        # Year pattern (4-digit number between 1950-2030)
+        if re.search(r"\b(19[5-9]\d|20[0-3]\d)\b", text):
+            return True
+
+        # Known chassis codes
+        chassis_codes = {
+            # BMW
+            "e21", "e24", "e28", "e30", "e34", "e36", "e38", "e39",
+            "e46", "e53", "e60", "e82", "e90", "e92", "f10", "f30",
+            "f80", "f82", "g20", "g80", "g82",
+            # Honda
+            "fk2", "fk7", "fk8", "fl5", "dc2", "dc5",
+            # Nissan
+            "s13", "s14", "s15", "z32", "z33", "z34",
+            "r32", "r33", "r34", "r35",
+            # Subaru
+            "gc8", "va", "vb",
+            # Toyota
+            "ae86", "jza80", "a80", "a90",
+        }
+        if words & chassis_codes:
+            return True
+
+        # Common makes
+        makes = {
+            "acura", "audi", "bmw", "buick", "cadillac", "chevrolet", "chevy",
+            "chrysler", "dodge", "ford", "genesis", "gmc", "honda", "hyundai",
+            "infiniti", "jaguar", "jeep", "kia", "lexus", "lincoln", "mazda",
+            "mercedes", "mini", "mitsubishi", "nissan", "pontiac", "porsche",
+            "ram", "scion", "subaru", "tesla", "toyota", "volkswagen", "vw",
+            "volvo",
+        }
+        if words & makes:
+            return True
+
+        return False
+
+    def _augment_query_with_history(
+        self,
+        query: str,
+        history: list[dict[str, str]] | None,
+    ) -> str:
+        """Prepend vehicle context from history if the current query lacks it.
+
+        Scans previous user messages for vehicle info (year, make, model, chassis).
+        If found and the current query doesn't already contain vehicle info,
+        prepends it so the DSPy pipeline can resolve the vehicle.
+        """
+        if not history:
+            return query
+
+        # If the query already has vehicle info, it's a fresh query
+        if self._has_vehicle_info(query):
+            return query
+
+        # Find the most recent user message that had vehicle info
+        for msg in reversed(history):
+            if msg["role"] == "user" and self._has_vehicle_info(msg["content"]):
+                vehicle_query = msg["content"].strip()
+                return f"{vehicle_query} — {query}"
+
+        return query
 
     # -------------------------------------------------------------------------
     # Data Operations
@@ -112,9 +186,11 @@ class RAGService:
 
         try:
             # Phase 1: Retrieval via DSPy pipeline (sync, runs in thread)
+            # Augment query with vehicle context from history for follow-ups
             pipeline = self._get_pipeline()
+            augmented_query = self._augment_query_with_history(query, history)
             retrieval: RetrievalResult = await asyncio.to_thread(
-                pipeline.retrieve, query
+                pipeline.retrieve, augmented_query
             )
 
             yield _emit_event("start", {"messageId": message_id})
