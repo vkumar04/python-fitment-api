@@ -38,7 +38,7 @@ def parse_sse_response(response_text: str) -> dict[str, Any]:
             parsed = json.loads(data)
             if parsed.get("type") == "text-delta":
                 text_content += parsed.get("delta", "")
-            elif parsed.get("type") == "data-metadata":
+            elif parsed.get("type") == "data-fitment":
                 metadata = parsed.get("data", {})
         except json.JSONDecodeError:
             continue
