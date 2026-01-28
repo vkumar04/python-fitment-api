@@ -110,6 +110,9 @@ class RAGService:
         """
         message_id = f"msg_{uuid.uuid4().hex}"
 
+        started = False
+        text_id = f"text_{uuid.uuid4().hex[:8]}"
+
         try:
             # Phase 1: Retrieval via DSPy pipeline (sync, runs in thread)
             pipeline = self._get_pipeline()
@@ -118,17 +121,18 @@ class RAGService:
             )
 
             yield _emit_event("start", {"messageId": message_id})
+            started = True
 
             # Early return (clarification, error, invalid vehicle)
             if retrieval.early_response:
-                yield _emit_event("text-start", {"id": message_id})
+                yield _emit_event("text-start", {"id": text_id})
                 yield _emit_event(
                     "text-delta",
-                    {"id": message_id, "delta": retrieval.early_response},
+                    {"id": text_id, "delta": retrieval.early_response},
                 )
-                yield _emit_event("text-end", {"id": message_id})
+                yield _emit_event("text-end", {"id": text_id})
                 yield _emit_event(
-                    "data-metadata",
+                    "data-fitment",
                     {
                         "data": {
                             "parsed": retrieval.parsed,
@@ -137,7 +141,7 @@ class RAGService:
                         }
                     },
                 )
-                yield _emit_event("finish", {"finishReason": "stop"})
+                yield _emit_event("finish", {})
                 yield "data: [DONE]\n\n"
                 return
 
@@ -147,8 +151,8 @@ class RAGService:
                 query=query,
                 vehicle_info=retrieval.vehicle_summary,
                 bolt_pattern=specs.get("bolt_pattern", "Unknown"),
-                center_bore=float(specs.get("center_bore", 0)),
-                max_diameter=int(specs.get("max_diameter", 20)),
+                center_bore=float(specs.get("center_bore") or 0),
+                max_diameter=int(specs.get("max_diameter") or 20),
                 width_range=f"{specs.get('min_width', 6.0)}-{specs.get('max_width', 10.0)}",
                 offset_range=f"+{specs.get('min_offset', -10)} to +{specs.get('max_offset', 50)}",
                 context=retrieval.community_str,
@@ -178,20 +182,20 @@ class RAGService:
             )
             log_external_call("openai", "chat.completions.create", True)
 
-            yield _emit_event("text-start", {"id": message_id})
+            yield _emit_event("text-start", {"id": text_id})
 
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     yield _emit_event(
-                        "text-delta", {"id": message_id, "delta": content}
+                        "text-delta", {"id": text_id, "delta": content}
                     )
 
-            yield _emit_event("text-end", {"id": message_id})
+            yield _emit_event("text-end", {"id": text_id})
 
             # Metadata with retrieval context
             yield _emit_event(
-                "data-metadata",
+                "data-fitment",
                 {
                     "data": {
                         "sources": retrieval.community_fitments[:5],
@@ -213,16 +217,21 @@ class RAGService:
                 },
             )
 
-            yield _emit_event("finish", {"finishReason": "stop"})
+            yield _emit_event("finish", {})
             yield "data: [DONE]\n\n"
 
         except Exception as e:
             log_error("Streaming error", e, query=query[:50])
-            yield _emit_event("start", {"messageId": message_id})
+            if not started:
+                yield _emit_event("start", {"messageId": message_id})
+            error_id = f"error_{uuid.uuid4().hex[:8]}"
+            yield _emit_event("text-start", {"id": error_id})
             yield _emit_event(
-                "error", {"message": "An unexpected error occurred"}
+                "text-delta",
+                {"id": error_id, "delta": "An unexpected error occurred. Please try again."},
             )
-            yield _emit_event("finish", {"finishReason": "error"})
+            yield _emit_event("text-end", {"id": error_id})
+            yield _emit_event("finish", {})
             yield "data: [DONE]\n\n"
 
 
