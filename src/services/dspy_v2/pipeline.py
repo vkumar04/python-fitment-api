@@ -686,16 +686,29 @@ class FitmentPipeline(dspy.Module):
         min_offset = specs.get("min_offset", -10)
         max_offset = specs.get("max_offset", 50)
 
-        suspension_adjustments = {
+        # Suspension-based adjustments for offset and width tolerance
+        susp = suspension or "stock"
+        offset_adjustments = {
             "stock": 0,
             "lowered": -5,
             "coilovers": -10,
             "air": -15,
             "lifted": 5,  # Lifted trucks need more offset
         }
+        # Coilovers/air can accommodate wider wheels with proper camber
+        width_adjustments = {
+            "stock": 0.0,
+            "lowered": 0.0,
+            "coilovers": 0.5,
+            "air": 1.0,
+            "lifted": 0.0,
+        }
 
-        adjustment = suspension_adjustments.get(suspension or "stock", 0)
-        adjusted_min_offset = min_offset + adjustment
+        offset_adj = offset_adjustments.get(susp, 0)
+        width_adj = width_adjustments.get(susp, 0.0)
+        adjusted_min_offset = min_offset + offset_adj
+        base_max_width = specs.get("max_width", 10.0)
+        adjusted_max_width = base_max_width + width_adj
 
         # Filter wheels
         valid_wheels = []
@@ -718,20 +731,20 @@ class FitmentPipeline(dspy.Module):
                     f'Diameter {diameter}" too large (max {specs.get("max_diameter")}")'
                 )
 
-            # Check width
+            # Check width (adjusted for suspension)
             if width < specs.get("min_width", 6.0):
                 rejection_reasons.append(
                     f'Width {width}" too narrow (min {specs.get("min_width")}")'
                 )
-            elif width > specs.get("max_width", 10.0):
+            elif width > adjusted_max_width:
                 rejection_reasons.append(
-                    f'Width {width}" too wide (max {specs.get("max_width")}")'
+                    f'Width {width}" too wide (max {adjusted_max_width}" on {susp})'
                 )
 
             # Check offset
             if offset < adjusted_min_offset:
                 rejection_reasons.append(
-                    f"Offset +{offset} too aggressive (min +{adjusted_min_offset})"
+                    f"Offset +{offset} too aggressive (min +{adjusted_min_offset} on {susp})"
                 )
             elif offset > max_offset:
                 rejection_reasons.append(
@@ -744,10 +757,41 @@ class FitmentPipeline(dspy.Module):
             else:
                 # Add fitment notes
                 notes = []
+                min_width = specs.get("min_width", 6.0)
+
+                # Width notes (relative to base spec, not adjusted)
+                if width > base_max_width:
+                    notes.append(
+                        f"exceeds stock max width ({base_max_width}\") — "
+                        f"OK on {susp} with proper camber"
+                    )
+                elif width == base_max_width:
+                    notes.append("maximum recommended width for stock")
+                elif width >= base_max_width - 0.5 and width > min_width:
+                    notes.append("near maximum width")
+
+                # Offset notes (relative to base spec, not adjusted)
                 if offset < min_offset + 5:
-                    notes.append("aggressive fit, may need fender work")
+                    if susp in ("coilovers", "air"):
+                        notes.append(
+                            f"aggressive offset — manageable on {susp}"
+                        )
+                    else:
+                        notes.append("aggressive offset, may need fender work")
                 if offset > max_offset - 5:
                     notes.append("conservative fit, good clearance")
+
+                # Width + offset interaction
+                if width >= base_max_width - 0.5 and offset < min_offset + 10:
+                    if susp in ("coilovers", "air"):
+                        notes.append(
+                            "wide wheel with aggressive offset — adjust camber and ride height"
+                        )
+                    else:
+                        notes.append(
+                            "wide wheel with aggressive offset — fender rolling or pulling likely needed"
+                        )
+
                 if diameter == specs.get("max_diameter"):
                     notes.append("maximum recommended diameter")
 
