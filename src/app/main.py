@@ -224,7 +224,7 @@ async def chat_stream(
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
-                "x-vercel-ai-data-stream": "v1",
+                "x-vercel-ai-ui-message-stream": "v1",
             },
         )
     except Exception as e:
