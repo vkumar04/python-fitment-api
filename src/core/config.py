@@ -1,13 +1,24 @@
 """Application configuration with environment variable validation."""
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Resolve .env relative to the project root (3 levels up from this file)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Supabase
     supabase_url: str = Field(..., validation_alias="SUPABASE_URL")
@@ -31,11 +42,6 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_requests: int = Field(default=30, validation_alias="RATE_LIMIT_REQUESTS")
     rate_limit_period: int = Field(default=60, validation_alias="RATE_LIMIT_PERIOD")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "ignore"
 
     @property
     def cors_origins(self) -> list[str]:
