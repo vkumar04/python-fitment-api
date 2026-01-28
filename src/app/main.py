@@ -1,7 +1,9 @@
 """FastAPI application for Wheel Fitment RAG API."""
 
 import asyncio
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -46,11 +48,18 @@ def get_rag_service() -> RAGService:
 async def lifespan(app: FastAPI):
     """Application lifespan - initialize services on startup."""
     logger.info("Starting Wheel Fitment RAG API...")
+
+    # Thread pool for DSPy pipeline calls (I/O-bound: LLM + DB)
+    max_workers = int(os.environ.get("PIPELINE_THREADS", 16))
+    app.state.pipeline_executor = ThreadPoolExecutor(max_workers=max_workers)
+    logger.info("Pipeline thread pool initialized (max_workers=%d)", max_workers)
+
     # Pre-initialize RAG service
     get_rag_service()
     logger.info("RAG service initialized")
     yield
     logger.info("Shutting down...")
+    app.state.pipeline_executor.shutdown(wait=False)
 
 
 app = FastAPI(
@@ -195,10 +204,13 @@ async def chat_stream(
             ]
 
         # Create async generator wrapper for StreamingResponse
+        executor = request.app.state.pipeline_executor
         async def generate():
             try:
                 async for event in rag_service.ask_streaming(
-                    query=chat_request.query, history=history
+                    query=chat_request.query,
+                    history=history,
+                    executor=executor,
                 ):
                     yield event
             except Exception as e:

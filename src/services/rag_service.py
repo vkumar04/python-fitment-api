@@ -10,15 +10,17 @@ import json
 import re
 import uuid
 from collections.abc import AsyncGenerator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from openai import AsyncOpenAI
 
 from ..core.config import get_settings
-from ..core.logging import log_error, log_external_call
+from ..core.logging import log_error, log_external_call, logger
 from ..db import fitments as db
 from ..prompts.fitment_assistant import SYSTEM_PROMPT, build_user_prompt
-from .dspy_v2 import FitmentPipeline, RetrievalResult, create_pipeline
+from .dspy_v2 import FitmentPipeline, create_pipeline
+from .retrieval_cache import RetrievalCache
 
 
 class RAGService:
@@ -32,6 +34,8 @@ class RAGService:
         self._pipeline: FitmentPipeline | None = None
         self._model = model
         self._openai_client: AsyncOpenAI | None = None
+        self._retrieval_cache = RetrievalCache(maxsize=256, ttl=1800)
+        self._pipeline_semaphore = asyncio.Semaphore(12)
 
     def _get_pipeline(self) -> FitmentPipeline:
         """Lazy-load the DSPy pipeline."""
@@ -173,25 +177,91 @@ class RAGService:
         self,
         query: str,
         history: list[dict[str, str]] | None = None,
+        executor: ThreadPoolExecutor | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream SSE events for a fitment query.
 
         Phase 1: DSPy pipeline retrieves context (vehicle specs, community
-                 fitments, matching Kansei wheels).
+                 fitments, matching Kansei wheels). Results are cached so
+                 identical vehicle queries skip the pipeline.
         Phase 2: OpenAI streams the response using that context.
 
         Emits Vercel AI SDK compatible SSE events.
+
+        Args:
+            query: User's natural language query.
+            history: Conversation history for follow-up context.
+            executor: Optional ThreadPoolExecutor for pipeline calls.
         """
         message_id = f"msg_{uuid.uuid4().hex}"
+        loop = asyncio.get_event_loop()
+
+        async def _run_in_thread(fn: Any, *args: Any) -> Any:
+            """Run a sync function in the thread pool."""
+            if executor:
+                return await loop.run_in_executor(executor, fn, *args)
+            return await asyncio.to_thread(fn, *args)
 
         try:
-            # Phase 1: Retrieval via DSPy pipeline (sync, runs in thread)
+            # Phase 1: Retrieval via DSPy pipeline
             # Augment query with vehicle context from history for follow-ups
             pipeline = self._get_pipeline()
             augmented_query = self._augment_query_with_history(query, history)
-            retrieval: RetrievalResult = await asyncio.to_thread(
-                pipeline.retrieve, augmented_query
-            )
+
+            # Step 1a: Quick parse to build cache key (~2s, one LLM call)
+            def _parse_input() -> Any:
+                return pipeline.parse_input(user_input=augmented_query)
+
+            parsed_raw = await _run_in_thread(_parse_input)
+
+            if not parsed_raw.is_valid_input or str(parsed_raw.is_valid_input).lower() == "false":
+                # Invalid input — return clarification directly
+                clarification = (
+                    parsed_raw.clarification_needed
+                    or "What vehicle are you working with?"
+                )
+                parsed_info = pipeline._extract_parsed(parsed_raw)
+
+                yield _emit_event("start", {"messageId": message_id})
+                yield _emit_event("text-start", {"id": message_id})
+                yield _emit_event(
+                    "text-delta",
+                    {"id": message_id, "delta": clarification},
+                )
+                yield _emit_event("text-end", {"id": message_id})
+                yield _emit_event(
+                    "data-metadata",
+                    {
+                        "data": {
+                            "parsed": parsed_info,
+                            "specs": None,
+                            "validation": {"valid": False, "reason": "insufficient_input"},
+                        }
+                    },
+                )
+                yield _emit_event("finish", {"finishReason": "stop"})
+                yield "data: [DONE]\n\n"
+                return
+
+            parsed_info = pipeline._extract_parsed(parsed_raw)
+
+            # Step 1b: Check retrieval cache
+            cache_key = RetrievalCache.make_key(parsed_info)
+            cached = self._retrieval_cache.get(cache_key)
+
+            if cached is not None:
+                retrieval = cached
+                logger.info("Retrieval cache hit: %s", cache_key)
+            else:
+                # Step 1c: Full retrieval (expensive, gated by semaphore)
+                async with self._pipeline_semaphore:
+                    retrieval = await _run_in_thread(
+                        pipeline.retrieve, augmented_query
+                    )
+
+                # Cache successful retrievals (not early_response errors)
+                if not retrieval.early_response:
+                    self._retrieval_cache.set(cache_key, retrieval)
 
             yield _emit_event("start", {"messageId": message_id})
 

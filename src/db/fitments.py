@@ -5,10 +5,12 @@ Fitment search is handled by dspy_v2/db.py's search_community_fitments().
 """
 
 import asyncio
+import threading
 import time
 from typing import Any, cast
 
 import pandas as pd
+from cachetools import TTLCache
 
 from ..core.logging import log_db_query, logger
 from ..services.fitment import (
@@ -21,9 +23,21 @@ from ..services.fitment import (
 from ..utils.converters import safe_float, safe_int
 from .client import get_supabase_client as _get_client
 
+# ---------------------------------------------------------------------------
+# Metadata caches — these rarely change, so we cache for 1 hour.
+# ---------------------------------------------------------------------------
+_makes_cache: TTLCache[str, list[str]] = TTLCache(maxsize=1, ttl=3600)
+_models_cache: TTLCache[str, list[str]] = TTLCache(maxsize=100, ttl=3600)
+_years_cache: TTLCache[str, list[int]] = TTLCache(maxsize=1, ttl=3600)
+_metadata_lock = threading.Lock()
+
 
 async def get_makes() -> list[str]:
-    """Get all unique makes."""
+    """Get all unique makes (cached for 1 hour)."""
+    with _metadata_lock:
+        if "all" in _makes_cache:
+            return _makes_cache["all"]
+
     start = time.time()
 
     def _query():
@@ -34,11 +48,20 @@ async def get_makes() -> list[str]:
 
     if not isinstance(result.data, list):
         return []
-    return [cast(str, row["make"]) for row in result.data if isinstance(row, dict)]
+    makes = [cast(str, row["make"]) for row in result.data if isinstance(row, dict)]
+
+    with _metadata_lock:
+        _makes_cache["all"] = makes
+    return makes
 
 
 async def get_models(make: str) -> list[str]:
-    """Get all models for a make."""
+    """Get all models for a make (cached for 1 hour per make)."""
+    cache_key = make.lower()
+    with _metadata_lock:
+        if cache_key in _models_cache:
+            return _models_cache[cache_key]
+
     start = time.time()
 
     def _query():
@@ -49,11 +72,19 @@ async def get_models(make: str) -> list[str]:
 
     if not isinstance(result.data, list):
         return []
-    return [cast(str, row["model"]) for row in result.data if isinstance(row, dict)]
+    models = [cast(str, row["model"]) for row in result.data if isinstance(row, dict)]
+
+    with _metadata_lock:
+        _models_cache[cache_key] = models
+    return models
 
 
 async def get_years() -> list[int]:
-    """Get all unique years."""
+    """Get all unique years (cached for 1 hour)."""
+    with _metadata_lock:
+        if "all" in _years_cache:
+            return _years_cache["all"]
+
     start = time.time()
 
     def _query():
@@ -64,7 +95,11 @@ async def get_years() -> list[int]:
 
     if not isinstance(result.data, list):
         return []
-    return [cast(int, row["year"]) for row in result.data if isinstance(row, dict)]
+    years = [cast(int, row["year"]) for row in result.data if isinstance(row, dict)]
+
+    with _metadata_lock:
+        _years_cache["all"] = years
+    return years
 
 
 async def load_csv_data(csv_path: str, batch_size: int = 500) -> int:
