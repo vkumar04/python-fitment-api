@@ -134,7 +134,10 @@ CORRECT: `Kansei: Not available in this size`
 - Off-topic: "I'm the Kansei Fitment Assistant. What vehicle are you fitting wheels on?"
 
 ## HUB RINGS
-Kansei wheels have a 73.1mm center bore. When vehicle center bore differs, mention hub rings are needed."""
+Most Kansei wheels have a 73.1mm center bore, but some SKUs are machined to match specific vehicles (e.g., 72.6mm for BMW 5x120).
+- If the wheel's center bore is LARGER than the vehicle's hub, hub rings are needed (e.g., 73.1 → 72.6mm)
+- If the wheel's center bore matches the vehicle's hub exactly, no hub rings are needed
+- When recommending, say "you may need hub rings (73.1 → Xmm) depending on the specific wheel" rather than stating it as always required"""
 
 
 def build_user_prompt(
@@ -154,7 +157,7 @@ def build_user_prompt(
     trim_info = f" ({trim})" if trim else ""
     center_bore_str = f"{center_bore}" if center_bore else "unknown"
     hub_ring_note = (
-        f"Hub ring: 73.1 to {center_bore_str}mm needed"
+        f"Hub ring: may be needed (73.1 → {center_bore_str}mm) if wheel bore is larger than hub"
         if center_bore and center_bore != 73.1
         else ""
     )

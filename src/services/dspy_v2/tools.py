@@ -273,7 +273,9 @@ def _lookup_known_specs(
             "max_offset": 35,
         },
         "E39": {
-            **_bmw_5x120,
+            "bolt_pattern": "5x120",
+            "center_bore": 74.1,  # E39 uniquely uses 74.1mm, not 72.6mm
+            "stud_size": "M12x1.5",
             "oem_diameter": 16,
             "min_diameter": 16,
             "max_diameter": 19,
@@ -576,6 +578,20 @@ def _lookup_known_specs(
             "min_width": 8.5,
             "max_width": 10.0,
             "oem_offset": 60,
+            "min_offset": 35,
+            "max_offset": 50,
+        },
+        ("civic type r", "fl5"): {
+            "bolt_pattern": "5x120",
+            "center_bore": 64.1,
+            "stud_size": "M14x1.5",
+            "oem_diameter": 19,
+            "min_diameter": 18,
+            "max_diameter": 20,
+            "oem_width": 9.5,
+            "min_width": 8.5,
+            "max_width": 10.5,
+            "oem_offset": 45,
             "min_offset": 35,
             "max_offset": 50,
         },
@@ -1036,10 +1052,12 @@ def _lookup_known_specs(
                 "max_offset": 50,
             }
         if "mustang" in model_lower:
+            # Pre-2015 (SN95/S197) used 1/2"x20 studs; S550+ (2015+) uses M14x1.5
+            stud = '1/2"x20' if (year and year < 2015) else "M14x1.5"
             return {
                 "bolt_pattern": "5x114.3",
                 "center_bore": 70.5,
-                "stud_size": "M14x1.5",
+                "stud_size": stud,
                 "oem_diameter": 18,
                 "min_diameter": 17,
                 "max_diameter": 20,
