@@ -69,6 +69,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS middleware — must be added at module level, not in on_event("startup"),
+# because startup event handlers are ignored when a lifespan is used.
+_settings = get_settings()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_settings.cors_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
+)
+
 # State for limiter
 app.state.limiter = limiter
 
@@ -78,19 +89,6 @@ app.state.limiter = limiter
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     log_error("Rate limit exceeded", client=get_remote_address(request))
     raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
-
-
-# CORS middleware - add on startup
-@app.on_event("startup")
-async def setup_cors():
-    settings = get_settings()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "Authorization", "X-Admin-Key"],
-    )
 
 
 # Request logging middleware
@@ -188,8 +186,7 @@ async def chat_stream(
     """
     Streaming chat endpoint - Vercel AI SDK compatible.
 
-    Uses the Vercel AI SDK Data Stream Protocol with SSE format.
-    Set streamProtocol: 'data' in useChat() options.
+    Uses the Vercel AI SDK UI Message Stream Protocol with SSE format.
 
     Rate limited to 30 requests per minute per IP.
     """

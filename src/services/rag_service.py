@@ -194,11 +194,11 @@ class RAGService:
             executor: Optional ThreadPoolExecutor for pipeline calls.
         """
         message_id = f"msg_{uuid.uuid4().hex}"
-        loop = asyncio.get_event_loop()
 
         async def _run_in_thread(fn: Any, *args: Any) -> Any:
             """Run a sync function in the thread pool."""
             if executor:
+                loop = asyncio.get_running_loop()
                 return await loop.run_in_executor(executor, fn, *args)
             return await asyncio.to_thread(fn, *args)
 
@@ -226,14 +226,14 @@ class RAGService:
                 parsed_info = pipeline._extract_parsed(parsed_raw)
 
                 yield _emit_event("start", {"messageId": message_id})
-                yield _emit_event("text-start", {"id": message_id})
+                yield _emit_event("text-start", {"id": text_id})
                 yield _emit_event(
                     "text-delta",
-                    {"id": message_id, "delta": clarification},
+                    {"id": text_id, "delta": clarification},
                 )
-                yield _emit_event("text-end", {"id": message_id})
+                yield _emit_event("text-end", {"id": text_id})
                 yield _emit_event(
-                    "data-metadata",
+                    "data-fitment",
                     {
                         "data": {
                             "parsed": parsed_info,
@@ -242,7 +242,7 @@ class RAGService:
                         }
                     },
                 )
-                yield _emit_event("finish", {"finishReason": "stop"})
+                yield _emit_event("finish", {})
                 yield "data: [DONE]\n\n"
                 return
 
