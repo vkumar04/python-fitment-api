@@ -560,10 +560,45 @@ class FitmentPipeline(dspy.Module):
         }
 
     def _resolve_specs(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
-        """Resolve vehicle specs from DB or web search."""
+        """Resolve vehicle specs from knowledge base, then DB, then web scrape.
+
+        Priority order:
+        1. Knowledge base (hardcoded, verified specs for known vehicles)
+        2. Database (cached specs from previous lookups)
+        3. Web scrape (wheel-size.com for unknown vehicles)
+
+        This ensures known vehicles like E30 M3 always get correct specs
+        even if DB has stale/incorrect data.
+        """
         model = parsed.get("model") or ""
 
-        # Try DB first
+        # Try knowledge base FIRST (most reliable for known vehicles)
+        if parsed.get("make"):
+            kb_result = search_vehicle_specs_web(
+                year=parsed.get("year"),
+                make=parsed["make"],
+                model=model,
+                chassis_code=parsed.get("chassis_code"),
+            )
+            # Knowledge base results are high confidence and should be trusted
+            if kb_result.get("found") and kb_result.get("source") == "knowledge_base":
+                return {
+                    "bolt_pattern": kb_result["bolt_pattern"],
+                    "center_bore": kb_result["center_bore"],
+                    "stud_size": kb_result.get("stud_size"),
+                    "year_start": kb_result.get("year_start"),
+                    "year_end": kb_result.get("year_end"),
+                    "min_diameter": kb_result.get("min_diameter", 15),
+                    "max_diameter": kb_result.get("max_diameter", 20),
+                    "min_width": kb_result.get("min_width", 6.0),
+                    "max_width": kb_result.get("max_width", 10.0),
+                    "min_offset": kb_result.get("min_offset", -10),
+                    "max_offset": kb_result.get("max_offset", 50),
+                    "source": "knowledge_base",
+                    "confidence": kb_result.get("confidence", 0.85),
+                }
+
+        # Try DB second (cached specs)
         db_specs = None
         try:
             db_specs = db.find_vehicle_specs(
@@ -578,7 +613,7 @@ class FitmentPipeline(dspy.Module):
         if db_specs and db_specs.get("bolt_pattern"):
             return db_specs
 
-        # Not in DB - try web search
+        # Not in knowledge base or DB - try web scrape
         if parsed.get("make"):
             web_result = search_vehicle_specs_web(
                 year=parsed.get("year"),
