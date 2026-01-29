@@ -181,6 +181,25 @@ def _lookup_known_specs(
         "center_bore": 66.5,
         "stud_size": "M14x1.25",
     }
+
+    # BMW model+chassis overrides for performance variants with different specs
+    # These take priority over generic chassis specs (e.g., E30 M3 is 5x120, not 4x100)
+    bmw_model_chassis_specs: dict[tuple[str, str], dict[str, Any]] = {
+        # E30 M3 (1986-1991) - uses 5x120, NOT 4x100 like regular E30
+        ("m3", "E30"): {
+            **_bmw_5x120,
+            "oem_diameter": 15,
+            "min_diameter": 14,
+            "max_diameter": 17,
+            "oem_width": 7.0,
+            "min_width": 7.0,
+            "max_width": 9.0,
+            "oem_offset": 25,
+            "min_offset": 10,
+            "max_offset": 35,
+        },
+    }
+
     bmw_specs = {
         # 4x100 era
         "E21": {
@@ -525,15 +544,26 @@ def _lookup_known_specs(
         "750i": [((1994, 2001), "E38")],
     }
 
-    # Check BMW by chassis code first
-    if make_lower == "bmw" and chassis_upper and chassis_upper in bmw_specs:
-        return bmw_specs[chassis_upper]
+    # Check BMW model+chassis overrides FIRST (e.g., E30 M3 has different specs than E30)
+    if make_lower == "bmw":
+        # Try explicit chassis + model combination
+        if chassis_upper:
+            model_chassis_key = (model_lower, chassis_upper)
+            if model_chassis_key in bmw_model_chassis_specs:
+                return bmw_model_chassis_specs[model_chassis_key]
 
-    # Check BMW by model + year (resolve to chassis code)
-    if make_lower == "bmw" and not chassis_upper:
-        chassis = _resolve_bmw_chassis(model_lower, year, _bmw_model_to_chassis)
-        if chassis and chassis in bmw_specs:
-            return bmw_specs[chassis]
+        # Try resolving chassis from model+year, then check overrides
+        resolved_chassis = _resolve_bmw_chassis(model_lower, year, _bmw_model_to_chassis)
+        if resolved_chassis:
+            model_chassis_key = (model_lower, resolved_chassis)
+            if model_chassis_key in bmw_model_chassis_specs:
+                return bmw_model_chassis_specs[model_chassis_key]
+
+        # Fall back to generic chassis specs
+        if chassis_upper and chassis_upper in bmw_specs:
+            return bmw_specs[chassis_upper]
+        if resolved_chassis and resolved_chassis in bmw_specs:
+            return bmw_specs[resolved_chassis]
 
     # Honda specs — year-aware
     _honda_4x100 = {
