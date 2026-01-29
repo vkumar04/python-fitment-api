@@ -438,6 +438,12 @@ class FitmentPipeline(dspy.Module):
                     )
 
         # Step 4: Get community fitments + Kansei wheels
+        # For classic cars (max_diameter <= 17), filter out extreme setups
+        # to avoid showing 19"+ wheels from heavily modified builds
+        community_max_diameter = None
+        if specs.get("max_diameter") and specs["max_diameter"] <= 17:
+            community_max_diameter = specs["max_diameter"]
+
         try:
             community_fitments = db.search_community_fitments(
                 make=parsed_info["make"],
@@ -445,6 +451,7 @@ class FitmentPipeline(dspy.Module):
                 year=parsed_info.get("year"),
                 fitment_style=parsed_info.get("fitment_style"),
                 suspension=parsed_info.get("suspension"),
+                max_diameter=community_max_diameter,
             )
         except Exception:
             community_fitments = []
@@ -814,7 +821,19 @@ class FitmentPipeline(dspy.Module):
         specs: dict[str, Any],
     ) -> tuple[str, str]:
         """Build formatted vehicle summary and specs summary strings."""
-        year_str = str(parsed_info.get("year")) if parsed_info.get("year") else ""
+        # Use specific year if provided, otherwise use year range from specs
+        if parsed_info.get("year"):
+            year_str = str(parsed_info["year"])
+        elif specs.get("year_start") and specs.get("year_end"):
+            year_start = specs["year_start"]
+            year_end = specs["year_end"]
+            if year_start == year_end:
+                year_str = str(year_start)
+            else:
+                year_str = f"{year_start}-{year_end}"
+        else:
+            year_str = ""
+
         chassis_str = (
             f" ({parsed_info.get('chassis_code')})"
             if parsed_info.get("chassis_code")
@@ -825,10 +844,11 @@ class FitmentPipeline(dspy.Module):
         if parsed_info.get("suspension"):
             vehicle_summary += f" on {parsed_info['suspension']}"
 
+        # Hub ring note: Kansei wheels are 73.1mm, vehicle may differ
         hub_ring_note = ""
         center_bore = specs.get("center_bore", 0)
         if center_bore and center_bore != 73.1:
-            hub_ring_note = f"\nHub rings needed: 73.1mm to {center_bore}mm"
+            hub_ring_note = f"\nHub rings needed: 73.1mm (Kansei) → {center_bore}mm (vehicle)"
 
         specs_summary = f"""Bolt Pattern: {specs.get("bolt_pattern", "Unknown")}
 Center Bore: {center_bore}mm{hub_ring_note}

@@ -188,6 +188,8 @@ def _lookup_known_specs(
         # E30 M3 (1986-1991) - uses 5x120, NOT 4x100 like regular E30
         ("m3", "E30"): {
             **_bmw_5x120,
+            "year_start": 1986,
+            "year_end": 1991,
             "oem_diameter": 15,
             "min_diameter": 14,
             "max_diameter": 17,
@@ -206,6 +208,8 @@ def _lookup_known_specs(
             "bolt_pattern": "4x100",
             "center_bore": 57.1,
             "stud_size": "M12x1.5",
+            "year_start": 1975,
+            "year_end": 1983,
             "oem_diameter": 13,
             "min_diameter": 13,
             "max_diameter": 15,
@@ -220,6 +224,8 @@ def _lookup_known_specs(
             "bolt_pattern": "4x100",
             "center_bore": 57.1,
             "stud_size": "M12x1.5",
+            "year_start": 1982,
+            "year_end": 1994,
             "oem_diameter": 14,
             "min_diameter": 13,
             "max_diameter": 17,
