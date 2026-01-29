@@ -241,9 +241,16 @@ def search_community_fitments(
     year: int | None = None,
     fitment_style: str | None = None,
     suspension: str | None = None,
+    max_diameter: int | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
-    """Search community fitment data for proven setups."""
+    """Search community fitment data for proven setups.
+
+    Args:
+        max_diameter: Optional maximum wheel diameter filter. Useful for classic cars
+                      where extreme setups (19"+) are uncommon and likely from heavily
+                      modified builds.
+    """
     # Build search query
     search_terms = [make, model]
     if year:
@@ -260,7 +267,7 @@ def search_community_fitments(
                 "filter_make": make,
                 "filter_model": model,
                 "filter_style": fitment_style,
-                "result_limit": limit,
+                "result_limit": limit * 2 if max_diameter else limit,  # Fetch more if filtering
             },
         )
         .execute()
@@ -289,6 +296,14 @@ def search_community_fitments(
                     }
                 )
 
+    # Filter by max diameter if specified (useful for classic cars)
+    if max_diameter and fitments:
+        fitments = [
+            f for f in fitments
+            if (f.get("front_diameter") or 0) <= max_diameter
+            and (f.get("rear_diameter") or 0) <= max_diameter
+        ]
+
     # Filter by suspension if specified (parse from document/notes)
     if suspension and fitments:
         suspension_lower = suspension.lower()
@@ -312,7 +327,8 @@ def search_community_fitments(
 
         fitments = matching + other
 
-    return fitments
+    # Ensure we don't exceed the requested limit after filtering
+    return fitments[:limit]
 
 
 def format_fitments_for_prompt(fitments: list[dict[str, Any]]) -> str:
