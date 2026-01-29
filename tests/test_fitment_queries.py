@@ -93,15 +93,14 @@ def check_server():
 class TestBMWValidChassisCodes:
     """Test valid BMW chassis code + model combinations."""
 
-    def test_e30_m3_4x100(self):
-        """E30 M3 (1986-1991) - 4x100 bolt pattern, should get Kansei 15" wheels."""
+    def test_e30_m3_5x120(self):
+        """E30 M3 (1986-1991) - 5x120 bolt pattern (NOT 4x100 like base E30)."""
         result = query_fitment("e30 m3 wheels")
         text = result["text"]
 
-        assert "4x100" in text
+        # E30 M3 uses 5x120 with 72.6mm center bore (different from base E30's 4x100)
+        assert "5x120" in text
         assert "M3" in text or "E30" in text
-        # Should recommend Kansei KNP or TANDEM 15"
-        assert "KNP" in text or "TANDEM" in text
         assert "kanseiwheels.com" in text
         # Should NOT assume a specific year
         assert "2002" not in text

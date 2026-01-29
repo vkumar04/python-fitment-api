@@ -338,10 +338,11 @@ CREATE TRIGGER vehicle_specs_updated_at
 
 INSERT INTO vehicle_specs (year_start, year_end, make, model, chassis_code, bolt_pattern, center_bore, stud_size, oem_diameter, min_diameter, max_diameter, oem_width, min_width, max_width, oem_offset, min_offset, max_offset, source, verified, confidence)
 VALUES
-  -- BMW E30 (4x100)
+  -- BMW E30 (4x100 for base models)
   (1982, 1994, 'BMW', '318i',  'E30', '4x100', 57.1, 'M12x1.5', 14, 13, 17, 6.0, 6.0, 8.5, 35, 15, 42, 'manual', TRUE, 1.0),
   (1982, 1994, 'BMW', '325i',  'E30', '4x100', 57.1, 'M12x1.5', 14, 13, 17, 6.5, 6.0, 8.5, 35, 15, 42, 'manual', TRUE, 1.0),
-  (1986, 1991, 'BMW', 'M3',    'E30', '4x100', 57.1, 'M12x1.5', 15, 14, 17, 7.0, 7.0, 9.0, 25, 10, 35, 'manual', TRUE, 1.0),
+  -- BMW E30 M3 uses 5x120 (different hubs/brakes from base E30)
+  (1986, 1991, 'BMW', 'M3',    'E30', '5x120', 72.6, 'M12x1.5', 15, 14, 17, 7.0, 7.0, 9.0, 25, 10, 35, 'manual', TRUE, 1.0),
 
   -- BMW E36 (5x120)
   (1992, 1999, 'BMW', '318i',  'E36', '5x120', 72.6, 'M12x1.5', 15, 15, 18, 7.0, 7.0, 9.0, 35, 20, 45, 'manual', TRUE, 1.0),

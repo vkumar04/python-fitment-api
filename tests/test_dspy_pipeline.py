@@ -91,15 +91,29 @@ class TestParseVehicleInput:
 class TestToolsLookup:
     """Test the web search tools."""
 
-    def test_lookup_bmw_specs(self):
-        """Test looking up BMW E30 specs."""
+    def test_lookup_bmw_e30_m3_specs(self):
+        """Test looking up BMW E30 M3 specs - should return 5x120, NOT 4x100 like base E30."""
         from src.services.dspy_v2.tools import search_vehicle_specs_web
 
         result = search_vehicle_specs_web(
             year=1989, make="BMW", model="M3", chassis_code="E30"
         )
 
-        assert result["found"] == True
+        assert result["found"]
+        # E30 M3 uses 5x120 (different hubs/brakes from base E30's 4x100)
+        assert result["bolt_pattern"] == "5x120"
+        assert result["center_bore"] == 72.6
+
+    def test_lookup_bmw_e30_base_specs(self):
+        """Test looking up regular BMW E30 specs - should return 4x100."""
+        from src.services.dspy_v2.tools import search_vehicle_specs_web
+
+        result = search_vehicle_specs_web(
+            year=1989, make="BMW", model="325i", chassis_code="E30"
+        )
+
+        assert result["found"]
+        # Regular E30 uses 4x100
         assert result["bolt_pattern"] == "4x100"
         assert result["center_bore"] == 57.1
 
@@ -111,8 +125,33 @@ class TestToolsLookup:
             year=2020, make="Honda", model="Civic", chassis_code=None
         )
 
-        assert result["found"] == True
+        assert result["found"]
         assert "114.3" in result["bolt_pattern"]  # 5x114.3
+
+    def test_e30_m3_without_chassis_code(self):
+        """Test that M3 query resolves to correct specs even without explicit chassis code."""
+        from src.services.dspy_v2.tools import search_vehicle_specs_web
+
+        result = search_vehicle_specs_web(
+            year=1989, make="BMW", model="M3", chassis_code=None
+        )
+
+        assert result["found"]
+        # Should resolve to E30 M3 based on year, and return 5x120
+        assert result["bolt_pattern"] == "5x120"
+        assert result["center_bore"] == 72.6
+
+    def test_e30_m3_case_insensitive(self):
+        """Test that M3 lookup is case-insensitive."""
+        from src.services.dspy_v2.tools import search_vehicle_specs_web
+
+        result = search_vehicle_specs_web(
+            year=1989, make="bmw", model="m3", chassis_code="e30"
+        )
+
+        assert result["found"]
+        assert result["bolt_pattern"] == "5x120"
+        assert result["center_bore"] == 72.6
 
 
 class TestFullPipeline:
