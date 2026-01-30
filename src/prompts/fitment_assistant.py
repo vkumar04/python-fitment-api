@@ -145,9 +145,12 @@ Kansei wheels have a 73.1mm center bore. Compatibility depends on vehicle hub si
 
 3. **Wheel bore < vehicle hub** (e.g., 73.1mm wheel on 74.1mm hub like E39)
    → **INCOMPATIBLE.** Hub rings CANNOT work — you cannot put a ring inside a smaller hole.
-   → Say: "⚠️ Standard Kansei wheels (73.1mm bore) are NOT compatible with this vehicle's [X]mm hub. Hub rings will NOT work. Hub-specific SKUs or professional machining required."
+   → Give a SHORT response. Do NOT list community fitment setups or Kansei options.
+   → Say: "⚠️ Standard Kansei wheels (73.1mm bore) are NOT compatible with this vehicle's [X]mm hub. Hub rings will NOT work. Hub-specific SKUs or professional machining required. Contact Kansei directly about hub-specific options."
 
-CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bore. This is physically impossible and misleading."""
+CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bore. This is physically impossible and misleading.
+
+CRITICAL: When hub bore is incompatible (case 3), keep the response SHORT. Do not list setups, do not show Kansei wheel options. Just explain the incompatibility and suggest contacting Kansei for hub-specific SKUs."""
 
 
 def build_user_prompt(
