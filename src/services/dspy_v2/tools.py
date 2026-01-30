@@ -186,19 +186,25 @@ def _lookup_known_specs(
     # These take priority over generic chassis specs (e.g., E30 M3 is 5x120, not 4x100)
     bmw_model_chassis_specs: dict[tuple[str, str], dict[str, Any]] = {
         # E30 M3 (1986-1991) - uses 5x120, NOT 4x100 like regular E30
+        # OEM: 15x7 ET25 (Style 5)
+        # Common aftermarket: 16-17", 7.5-9" wide
+        # Offset notes:
+        #   - ET15-25 = direct fit range (no spacers needed)
+        #   - ET30-35 = typically needs 10-15mm spacers to position correctly
+        # Tire notes: 235/40/17 is safe, 245/40/17 may need camber/rolling
         ("m3", "E30"): {
             **_bmw_5x120,
             "year_start": 1986,
             "year_end": 1991,
             "oem_diameter": 15,
-            "min_diameter": 14,
-            "max_diameter": 17,
+            "min_diameter": 15,
+            "max_diameter": 17,  # 18s possible but tight
             "oem_width": 7.0,
             "min_width": 7.0,
             "max_width": 9.0,
             "oem_offset": 25,
-            "min_offset": 10,
-            "max_offset": 35,
+            "min_offset": 15,  # Direct fit minimum
+            "max_offset": 25,  # Direct fit max; ET30+ needs spacers
         },
         # E39 M5 (1998-2003) - uses 74.1mm hub bore (NOT 72.6mm like most BMW 5x120)
         # Standard 73.1mm Kansei wheels are INCOMPATIBLE - hub-specific SKUs required
