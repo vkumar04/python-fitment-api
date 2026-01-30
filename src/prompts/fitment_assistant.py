@@ -170,6 +170,8 @@ def build_user_prompt(
     trim_info = f" ({trim})" if trim else ""
     center_bore_str = f"{center_bore}" if center_bore else "unknown"
     kansei_bore = 73.1
+    hub_incompatible = False
+
     if center_bore and center_bore != kansei_bore:
         if center_bore < kansei_bore:
             # Wheel bore larger than hub = hub rings work
@@ -180,9 +182,24 @@ def build_user_prompt(
                 f"⚠️ INCOMPATIBLE: {kansei_bore}mm Kansei bore cannot fit {center_bore}mm hub. "
                 f"Hub rings will NOT work. Hub-specific SKUs or machining required."
             )
+            hub_incompatible = True
     else:
         hub_ring_note = ""
+
     suspension_info = f"- User's Suspension: {suspension}\n" if suspension else ""
+
+    # For incompatible hub bore, don't show fitment data or Kansei options
+    # This forces a short response explaining the incompatibility
+    if hub_incompatible:
+        return f"""**USER QUERY:** {query}
+
+**VEHICLE:** {vehicle_info}{trim_info}
+- Bolt Pattern: {bolt_pattern}
+- Center Bore: {center_bore_str}mm
+- {hub_ring_note}
+
+**IMPORTANT:** Hub bore is incompatible. Do NOT list wheel setups or Kansei options.
+Give a SHORT response explaining the incompatibility and direct them to contact Kansei for hub-specific SKUs."""
 
     return f"""**USER QUERY:** {query}
 
