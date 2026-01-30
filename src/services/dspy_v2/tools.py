@@ -200,6 +200,24 @@ def _lookup_known_specs(
             "min_offset": 10,
             "max_offset": 35,
         },
+        # E39 M5 (1998-2003) - uses 74.1mm hub bore (NOT 72.6mm like most BMW 5x120)
+        # Standard 73.1mm Kansei wheels are INCOMPATIBLE - hub-specific SKUs required
+        ("m5", "E39"): {
+            "bolt_pattern": "5x120",
+            "center_bore": 74.1,
+            "stud_size": "M12x1.5",
+            "year_start": 1998,
+            "year_end": 2003,
+            "oem_diameter": 18,
+            "min_diameter": 17,
+            "max_diameter": 19,
+            "oem_width": 8.0,
+            "min_width": 8.0,
+            "max_width": 10.0,
+            "oem_offset": 20,
+            "min_offset": 15,
+            "max_offset": 35,
+        },
     }
 
     bmw_specs = {

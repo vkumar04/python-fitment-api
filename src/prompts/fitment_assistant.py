@@ -133,11 +133,21 @@ CORRECT: `Kansei: Not available in this size`
 - Kansei doesn't make the bolt pattern: "Kansei doesn't currently offer wheels in [BOLT PATTERN]."
 - Off-topic: "I'm the Kansei Fitment Assistant. What vehicle are you fitting wheels on?"
 
-## HUB RINGS
-Most Kansei wheels have a 73.1mm center bore, but some SKUs are machined to match specific vehicles (e.g., 72.6mm for BMW 5x120).
-- If the wheel's center bore is LARGER than the vehicle's hub, hub rings are needed (e.g., 73.1 → 72.6mm)
-- If the wheel's center bore matches the vehicle's hub exactly, no hub rings are needed
-- When recommending, say "you may need hub rings (73.1 → Xmm) depending on the specific wheel" rather than stating it as always required"""
+## HUB BORE COMPATIBILITY
+
+Kansei wheels have a 73.1mm center bore. Compatibility depends on vehicle hub size:
+
+1. **Wheel bore > vehicle hub** (e.g., 73.1mm wheel on 72.6mm hub)
+   → Hub rings WORK. Say: "Hub rings needed (73.1mm → 72.6mm)"
+
+2. **Wheel bore = vehicle hub** (73.1mm = 73.1mm)
+   → Perfect fit. No note needed.
+
+3. **Wheel bore < vehicle hub** (e.g., 73.1mm wheel on 74.1mm hub like E39)
+   → **INCOMPATIBLE.** Hub rings CANNOT work — you cannot put a ring inside a smaller hole.
+   → Say: "⚠️ Standard Kansei wheels (73.1mm bore) are NOT compatible with this vehicle's [X]mm hub. Hub rings will NOT work. Hub-specific SKUs or professional machining required."
+
+CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bore. This is physically impossible and misleading."""
 
 
 def build_user_prompt(
@@ -156,11 +166,19 @@ def build_user_prompt(
     """Build the user prompt with vehicle context and retrieved data."""
     trim_info = f" ({trim})" if trim else ""
     center_bore_str = f"{center_bore}" if center_bore else "unknown"
-    hub_ring_note = (
-        f"Hub ring: may be needed (73.1 → {center_bore_str}mm) if wheel bore is larger than hub"
-        if center_bore and center_bore != 73.1
-        else ""
-    )
+    kansei_bore = 73.1
+    if center_bore and center_bore != kansei_bore:
+        if center_bore < kansei_bore:
+            # Wheel bore larger than hub = hub rings work
+            hub_ring_note = f"Hub rings needed: {kansei_bore}mm → {center_bore}mm"
+        else:
+            # Wheel bore smaller than hub = INCOMPATIBLE
+            hub_ring_note = (
+                f"⚠️ INCOMPATIBLE: {kansei_bore}mm Kansei bore cannot fit {center_bore}mm hub. "
+                f"Hub rings will NOT work. Hub-specific SKUs or machining required."
+            )
+    else:
+        hub_ring_note = ""
     suspension_info = f"- User's Suspension: {suspension}\n" if suspension else ""
 
     return f"""**USER QUERY:** {query}
