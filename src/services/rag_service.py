@@ -305,6 +305,7 @@ class RAGService:
                 kansei_recommendations=retrieval.kansei_str,
                 trim=retrieval.parsed.get("trim"),
                 suspension=retrieval.parsed.get("suspension"),
+                recommended_setups=retrieval.recommended_setups_str,
             )
 
             messages: list[dict[str, str]] = [

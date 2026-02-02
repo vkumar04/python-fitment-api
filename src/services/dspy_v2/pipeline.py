@@ -5,13 +5,14 @@ This module orchestrates the entire fitment flow:
 2. Resolve specs → check DB, search web if needed, validate
 3. Get fitment data → community fitments + Kansei wheels
 4. Validate matches → ensure wheels actually fit
-5. Generate response → conversational output
+5. Generate response → conversational output with validation
 
 The pipeline exposes `retrieve()` for RAG use cases where the caller
 streams the final response separately (e.g. via OpenAI streaming).
 """
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,9 @@ class RetrievalResult:
     specs_summary: str = ""
     community_str: str = ""
     kansei_str: str = ""
+
+    # Pre-computed recommendations (math-based, OpenAI should use verbatim)
+    recommended_setups_str: str = ""
 
     # If set, the caller should return this text directly (error/clarification)
     early_response: str | None = None
@@ -289,6 +293,226 @@ PARSE_TRAINING_DATA = [
 
 
 # -----------------------------------------------------------------------------
+# Validation Functions for dspy.Refine
+# -----------------------------------------------------------------------------
+
+
+def extract_wheel_sizes_from_response(response: str) -> list[tuple[int, float]]:
+    """Extract wheel sizes (diameter x width) mentioned in a response.
+
+    Returns list of (diameter, width) tuples found in the response.
+    """
+    # Match patterns like "18x9.5", "17x9", "18x8.5"
+    pattern = r'\b(\d{2})x(\d+\.?\d*)\b'
+    matches = re.findall(pattern, response)
+    return [(int(d), float(w)) for d, w in matches]
+
+
+# -----------------------------------------------------------------------------
+# Math-Based Fitment Calculations
+# -----------------------------------------------------------------------------
+
+
+def calculate_wheel_fitment(
+    wheel_width_inches: float,
+    wheel_offset_mm: int,
+    oem_width_inches: float,
+    oem_offset_mm: int,
+    suspension: str = "stock",
+) -> dict[str, Any]:
+    """Calculate fitment geometry for a wheel compared to OEM specs.
+
+    This uses actual math to determine if a wheel will fit, rather than
+    relying on community data which may be inconsistent.
+
+    Key concept: Offset is the distance from the wheel centerline to the
+    mounting face. Higher offset = wheel sits further inboard (tucked).
+    Lower offset = wheel sits further outboard (poke).
+
+    Formulas:
+    - Poke (outer lip position) = (width_diff × 25.4 / 2) + (oem_offset - wheel_offset)
+    - Inner change = how much closer the inner lip is to suspension
+      = (width_diff × 25.4 / 2) + (wheel_offset - oem_offset)
+
+    Args:
+        wheel_width_inches: Aftermarket wheel width (e.g., 9.0)
+        wheel_offset_mm: Aftermarket wheel offset (e.g., +35)
+        oem_width_inches: Stock wheel width (e.g., 7.5)
+        oem_offset_mm: Stock wheel offset (e.g., +41)
+        suspension: Suspension type affects acceptable poke
+
+    Returns:
+        Dict with calculated fitment values and whether it's likely to fit
+    """
+    # Convert width difference to mm (1 inch = 25.4mm)
+    width_diff_inches = wheel_width_inches - oem_width_inches
+    width_diff_mm = width_diff_inches * 25.4
+
+    # Offset difference (positive = more poke, negative = more tuck)
+    offset_diff = oem_offset_mm - wheel_offset_mm
+
+    # Poke calculation: how much further out the wheel sits vs OEM
+    # Half the extra width goes outboard, plus offset difference
+    poke_mm = (width_diff_mm / 2) + offset_diff
+
+    # Inner clearance change: how much closer the inner lip is to suspension
+    # Positive value = inner lip moved inward (closer to strut - potentially bad)
+    # Negative value = inner lip moved outward (more clearance - good)
+    #
+    # - Wider wheel: inner lip moves inward by half width increase
+    # - Higher offset: mounting face closer to outer edge, so inner lip moves OUTWARD
+    # - Lower offset: mounting face closer to inner edge, so inner lip moves INWARD
+    inner_change_mm = (width_diff_mm / 2) - (wheel_offset_mm - oem_offset_mm)
+
+    # Acceptable poke thresholds based on suspension
+    # These are realistic for aftermarket wheels - most enthusiast setups
+    # run some poke even on stock suspension
+    poke_limits = {
+        "stock": 18,       # Stock suspension: ~18mm poke is daily-able
+        "lowered": 25,     # Lowered: more aggressive OK with roll
+        "coilovers": 35,   # Coilovers: can adjust camber, more poke OK
+        "air": 50,         # Air: max flexibility when aired out
+        "lifted": 10,      # Lifted trucks: less poke tolerance
+    }
+
+    # Inner clearance limits (strut/shock clearance)
+    inner_limits = {
+        "stock": 20,
+        "lowered": 20,
+        "coilovers": 25,   # Coilovers often have slimmer bodies
+        "air": 30,
+        "lifted": 20,
+    }
+
+    max_poke = poke_limits.get(suspension, 10)
+    max_inner = inner_limits.get(suspension, 15)
+
+    # Determine if it fits
+    fits = poke_mm <= max_poke and inner_change_mm <= max_inner
+
+    # Fitment style based on poke
+    # Note: On wide-body/flared cars (E30 M3, E36 M3), the flares absorb
+    # more poke visually, so +10mm may still look "flush"
+    if poke_mm < -5:
+        style = "tucked"
+    elif poke_mm < 10:
+        style = "flush"  # Up to 10mm is visually flush on most cars
+    elif poke_mm < 20:
+        style = "mild poke"  # 10-20mm is noticeable but daily-able
+    else:
+        style = "aggressive poke"  # 20mm+ requires mods on most cars
+
+    # Modification notes
+    mods_needed = []
+    if poke_mm > max_poke:
+        if poke_mm > max_poke + 15:
+            mods_needed.append("fender flares or wide body kit")
+        elif poke_mm > max_poke + 5:
+            mods_needed.append("fender rolling/pulling")
+        else:
+            mods_needed.append("minor fender adjustment")
+
+    if inner_change_mm > max_inner:
+        mods_needed.append("may need thinner strut spacers or camber arms")
+
+    return {
+        "poke_mm": round(poke_mm, 1),
+        "inner_change_mm": round(inner_change_mm, 1),
+        "fits_without_mods": fits,
+        "style": style,
+        "mods_needed": mods_needed,
+        "suspension": suspension,
+    }
+
+
+def filter_wheels_by_math(
+    kansei_wheels: list[dict[str, Any]],
+    oem_width: float,
+    oem_offset: int,
+    suspension: str = "stock",
+    fitment_style: str | None = None,
+) -> list[dict[str, Any]]:
+    """Filter Kansei wheels using math-based fitment calculations.
+
+    Args:
+        kansei_wheels: List of Kansei wheel dicts with diameter, width, offset
+        oem_width: OEM wheel width in inches
+        oem_offset: OEM wheel offset in mm
+        suspension: User's suspension type
+        fitment_style: Desired style (flush/aggressive/tucked)
+
+    Returns:
+        Filtered list of wheels that fit, with fitment calculations attached
+    """
+    filtered = []
+
+    for wheel in kansei_wheels:
+        width = wheel.get("width", 0)
+        offset = wheel.get("offset", 0)
+
+        calc = calculate_wheel_fitment(
+            wheel_width_inches=width,
+            wheel_offset_mm=offset,
+            oem_width_inches=oem_width,
+            oem_offset_mm=oem_offset,
+            suspension=suspension,
+        )
+
+        # Filter by fitment style preference
+        # Thresholds consistent with calculate_wheel_fitment:
+        # - tucked: < -5mm
+        # - flush: -5mm to +10mm
+        # - mild poke: +10mm to +20mm
+        # - aggressive: >= +20mm
+        if fitment_style:
+            style_lower = fitment_style.lower()
+            if style_lower == "flush" and calc["poke_mm"] > 10:
+                continue  # Too much poke for flush (needs < 10mm)
+            elif style_lower == "aggressive" and calc["poke_mm"] < 15:
+                continue  # Not aggressive enough (needs >= 15mm for aggressive look)
+            elif style_lower == "tucked" and calc["poke_mm"] > -5:
+                continue  # Not tucked enough (needs < -5mm)
+
+        # Include wheels that fit (or nearly fit with minor mods)
+        if calc["fits_without_mods"] or calc["poke_mm"] <= 20:
+            wheel_copy = wheel.copy()
+            wheel_copy["fitment_calc"] = calc
+            filtered.append(wheel_copy)
+
+    return filtered
+
+
+def create_kansei_validation_reward(available_sizes: set[tuple[int, float]]):
+    """Create a reward function that validates wheel sizes against Kansei inventory.
+
+    Args:
+        available_sizes: Set of (diameter, width) tuples that Kansei actually makes
+
+    Returns:
+        Reward function compatible with dspy.Refine
+    """
+    def reward_fn(args: dict, pred: dspy.Prediction) -> float:
+        """Score the response based on whether recommended sizes exist in Kansei catalog."""
+        response = pred.response if hasattr(pred, 'response') else str(pred)
+
+        # Extract sizes mentioned in the response
+        mentioned_sizes = extract_wheel_sizes_from_response(response)
+
+        if not mentioned_sizes:
+            # No sizes mentioned (might be asking a question) - that's fine
+            return 1.0
+
+        # Check how many mentioned sizes are valid
+        valid_count = sum(1 for size in mentioned_sizes if size in available_sizes)
+        total_count = len(mentioned_sizes)
+
+        # Return ratio of valid sizes (1.0 = all valid, 0.0 = none valid)
+        return valid_count / total_count if total_count > 0 else 1.0
+
+    return reward_fn
+
+
+# -----------------------------------------------------------------------------
 # Pipeline Module
 # -----------------------------------------------------------------------------
 
@@ -301,7 +525,10 @@ class FitmentPipeline(dspy.Module):
     2. resolve_specs: Get specs from DB or web, validate
     3. get_fitments: Fetch community data + Kansei wheels
     4. validate_match: Ensure wheels actually fit
-    5. generate_response: Create conversational output
+    5. generate_response: Create conversational output with validation
+
+    The response generation uses dspy.Refine to ensure recommended wheel
+    sizes actually exist in the Kansei catalog.
     """
 
     def __init__(self) -> None:
@@ -319,8 +546,12 @@ class FitmentPipeline(dspy.Module):
         # Step 4: Validate fitment matches
         self.validate_fitment = dspy.Predict(ValidateFitmentMatch)
 
-        # Step 5: Generate response
-        self.generate_response = dspy.Predict(GenerateFitmentResponse)
+        # Step 5: Generate response (base module - will be wrapped with Refine dynamically)
+        self._base_response_generator = dspy.Predict(GenerateFitmentResponse)
+
+        # Note: We create the Refine wrapper dynamically in forward() because
+        # the available Kansei sizes vary per query (different bolt patterns)
+        self.generate_response = self._base_response_generator
 
     def retrieve(self, user_input: str) -> RetrievalResult:
         """Run the retrieval phase only (steps 1-4), without generating a response.
@@ -473,10 +704,28 @@ class FitmentPipeline(dspy.Module):
             suspension=parsed_info.get("suspension"),
         )
 
+        # Build set of available Kansei sizes for filtering community fitments
+        available_kansei_sizes = set()
+        for w in validated_wheels["valid"]:
+            d = int(w.get("diameter", 0))
+            width = float(w.get("width", 0))
+            available_kansei_sizes.add((d, width))
+
+        # Filter community fitments to only show setups that match Kansei sizes
+        filtered_community = self._filter_community_by_kansei(
+            community_fitments, available_kansei_sizes
+        )
+
         # Build formatted strings for the prompt
         vehicle_summary, specs_summary = self._build_summaries(parsed_info, specs)
-        community_str = db.format_fitments_for_prompt(community_fitments)
+        community_str = db.format_fitments_for_prompt(filtered_community)
         kansei_str = db.format_kansei_for_prompt(validated_wheels["valid"])
+
+        # Generate pre-computed recommendations using math
+        recommended_setups_str = db.generate_recommended_setups(
+            validated_wheels["valid"],
+            fitment_style=parsed_info.get("fitment_style"),
+        )
 
         return RetrievalResult(
             parsed=parsed_info,
@@ -488,12 +737,15 @@ class FitmentPipeline(dspy.Module):
             specs_summary=specs_summary,
             community_str=community_str,
             kansei_str=kansei_str,
+            recommended_setups_str=recommended_setups_str,
         )
 
     def forward(self, user_input: str) -> dspy.Prediction:
         """Process a user query through the full pipeline.
 
-        Calls retrieve() then generates the response via DSPy.
+        Calls retrieve() then generates the response via DSPy with Refine
+        to ensure recommended wheel sizes exist in Kansei's catalog.
+
         For streaming use cases, call retrieve() directly and stream
         the response via OpenAI.
         """
@@ -509,8 +761,28 @@ class FitmentPipeline(dspy.Module):
                 validation=retrieval.validation,
             )
 
-        # Generate response via DSPy
-        result = self.generate_response(
+        # Build set of available Kansei sizes for validation
+        available_sizes: set[tuple[int, float]] = set()
+        for wheel in retrieval.kansei_wheels:
+            diameter = int(wheel.get("diameter", 0))
+            width = float(wheel.get("width", 0))
+            if diameter and width:
+                available_sizes.add((diameter, width))
+
+        # Create reward function for this specific query's Kansei inventory
+        reward_fn = create_kansei_validation_reward(available_sizes)
+
+        # Wrap response generator with Refine for validation
+        # N=3 means up to 3 attempts, threshold=1.0 means all sizes must be valid
+        refined_generator = dspy.Refine(
+            module=self._base_response_generator,
+            N=3,
+            reward_fn=reward_fn,
+            threshold=1.0,
+        )
+
+        # Generate response with validation
+        result = refined_generator(
             vehicle_summary=retrieval.vehicle_summary,
             vehicle_specs=retrieval.specs_summary,
             community_fitments=retrieval.community_str,
@@ -716,7 +988,12 @@ class FitmentPipeline(dspy.Module):
         kansei_wheels: list[dict[str, Any]],
         suspension: str | None,
     ) -> dict[str, Any]:
-        """Validate which Kansei wheels actually fit."""
+        """Validate which Kansei wheels actually fit using math-based calculations.
+
+        Uses geometry formulas to calculate poke and inner clearance, rather than
+        just checking if values fall within ranges. This gives more accurate
+        fitment predictions.
+        """
         if not kansei_wheels:
             return {
                 "valid": [],
@@ -724,35 +1001,13 @@ class FitmentPipeline(dspy.Module):
                 "summary": "No Kansei wheels available for this bolt pattern",
             }
 
-        # Adjust offset range based on suspension
-        min_offset = specs.get("min_offset", -10)
-        max_offset = specs.get("max_offset", 50)
-
-        # Suspension-based adjustments for offset and width tolerance
         susp = suspension or "stock"
-        offset_adjustments = {
-            "stock": 0,
-            "lowered": -5,
-            "coilovers": -10,
-            "air": -15,
-            "lifted": 5,  # Lifted trucks need more offset
-        }
-        # Coilovers/air can accommodate wider wheels with proper camber
-        width_adjustments = {
-            "stock": 0.0,
-            "lowered": 0.0,
-            "coilovers": 0.5,
-            "air": 1.0,
-            "lifted": 0.0,
-        }
 
-        offset_adj = offset_adjustments.get(susp, 0)
-        width_adj = width_adjustments.get(susp, 0.0)
-        adjusted_min_offset = min_offset + offset_adj
-        base_max_width = specs.get("max_width", 10.0)
-        adjusted_max_width = base_max_width + width_adj
+        # Get OEM specs for math calculations
+        oem_width = specs.get("oem_width", specs.get("min_width", 7.0))
+        oem_offset = specs.get("oem_offset", (specs.get("min_offset", 20) + specs.get("max_offset", 40)) // 2)
 
-        # Filter wheels
+        # Filter wheels using math-based calculations
         valid_wheels = []
         rejected_wheels = []
 
@@ -763,7 +1018,7 @@ class FitmentPipeline(dspy.Module):
 
             rejection_reasons = []
 
-            # Check diameter
+            # Check diameter bounds first (these are hard limits)
             if diameter < specs.get("min_diameter", 15):
                 rejection_reasons.append(
                     f'Diameter {diameter}" too small (min {specs.get("min_diameter")}")'
@@ -773,71 +1028,58 @@ class FitmentPipeline(dspy.Module):
                     f'Diameter {diameter}" too large (max {specs.get("max_diameter")}")'
                 )
 
-            # Check width (adjusted for suspension)
-            if width < specs.get("min_width", 6.0):
+            # Use math-based fitment calculation
+            fitment_calc = calculate_wheel_fitment(
+                wheel_width_inches=width,
+                wheel_offset_mm=offset,
+                oem_width_inches=oem_width,
+                oem_offset_mm=oem_offset,
+                suspension=susp,
+            )
+
+            # Check if math says it fits
+            if not fitment_calc["fits_without_mods"] and fitment_calc["poke_mm"] > 25:
                 rejection_reasons.append(
-                    f'Width {width}" too narrow (min {specs.get("min_width")}")'
-                )
-            elif width > adjusted_max_width:
-                rejection_reasons.append(
-                    f'Width {width}" too wide (max {adjusted_max_width}" on {susp})'
+                    f"Too much poke ({fitment_calc['poke_mm']}mm) for {susp} suspension"
                 )
 
-            # Check offset
-            if offset < adjusted_min_offset:
+            if fitment_calc["inner_change_mm"] > 25:
                 rejection_reasons.append(
-                    f"Offset +{offset} too aggressive (min +{adjusted_min_offset} on {susp})"
-                )
-            elif offset > max_offset:
-                rejection_reasons.append(
-                    f"Offset +{offset} too conservative (max +{max_offset})"
+                    f"Inner clearance issue ({fitment_calc['inner_change_mm']}mm closer to suspension)"
                 )
 
             if rejection_reasons:
                 wheel["rejection_reasons"] = rejection_reasons
                 rejected_wheels.append(wheel)
             else:
-                # Add fitment notes
+                # Add fitment notes based on math calculations
                 notes = []
-                min_width = specs.get("min_width", 6.0)
 
-                # Width notes (relative to base spec, not adjusted)
-                if width > base_max_width:
-                    notes.append(
-                        f"exceeds stock max width ({base_max_width}\") — "
-                        f"OK on {susp} with proper camber"
-                    )
-                elif width == base_max_width:
-                    notes.append("maximum recommended width for stock")
-                elif width >= base_max_width - 0.5 and width > min_width:
-                    notes.append("near maximum width")
+                # Poke-based notes (consistent with style thresholds)
+                poke = fitment_calc["poke_mm"]
+                if poke > 20:
+                    notes.append(f"aggressive poke ({poke:.0f}mm)")
+                elif poke > 10:
+                    notes.append(f"mild poke ({poke:.0f}mm)")
+                elif poke > -5:
+                    notes.append("flush fitment")
+                else:
+                    notes.append(f"tucked ({abs(poke):.0f}mm inside fender)")
 
-                # Offset notes (relative to base spec, not adjusted)
-                if offset < min_offset + 5:
-                    if susp in ("coilovers", "air"):
-                        notes.append(
-                            f"aggressive offset — manageable on {susp}"
-                        )
-                    else:
-                        notes.append("aggressive offset, may need fender work")
-                if offset > max_offset - 5:
-                    notes.append("conservative fit, good clearance")
+                # Modification notes from math
+                if fitment_calc["mods_needed"]:
+                    notes.extend(fitment_calc["mods_needed"])
 
-                # Width + offset interaction
-                if width >= base_max_width - 0.5 and offset < min_offset + 10:
-                    if susp in ("coilovers", "air"):
-                        notes.append(
-                            "wide wheel with aggressive offset — adjust camber and ride height"
-                        )
-                    else:
-                        notes.append(
-                            "wide wheel with aggressive offset — fender rolling or pulling likely needed"
-                        )
+                # Inner clearance notes
+                inner = fitment_calc["inner_change_mm"]
+                if inner > 10:
+                    notes.append(f"check strut clearance ({inner:.0f}mm closer than stock)")
 
                 if diameter == specs.get("max_diameter"):
                     notes.append("maximum recommended diameter")
 
                 wheel["fitment_notes"] = notes
+                wheel["fitment_calc"] = fitment_calc
                 valid_wheels.append(wheel)
 
         summary = f"{len(valid_wheels)} wheels fit"
@@ -849,6 +1091,50 @@ class FitmentPipeline(dspy.Module):
             "rejected": rejected_wheels,
             "summary": summary,
         }
+
+    def _filter_community_by_kansei(
+        self,
+        community_fitments: list[dict[str, Any]],
+        available_sizes: set[tuple[int, float]],
+    ) -> list[dict[str, Any]]:
+        """Filter community fitments to only include sizes that Kansei actually makes.
+
+        This prevents the model from seeing community data showing sizes like 18x9.5
+        when Kansei only makes 18x8.5 or 18x9.
+
+        Args:
+            community_fitments: List of community fitment records
+            available_sizes: Set of (diameter, width) tuples that Kansei makes
+
+        Returns:
+            Filtered list of fitments that match available Kansei sizes
+        """
+        if not available_sizes or not community_fitments:
+            return community_fitments
+
+        filtered = []
+        for fitment in community_fitments:
+            front_d = fitment.get("front_diameter")
+            front_w = fitment.get("front_width")
+            rear_d = fitment.get("rear_diameter")
+            rear_w = fitment.get("rear_width")
+
+            # Check if front size is available (or missing)
+            front_ok = (
+                not front_d or not front_w or
+                (int(front_d), float(front_w)) in available_sizes
+            )
+
+            # Check if rear size is available (or missing)
+            rear_ok = (
+                not rear_d or not rear_w or
+                (int(rear_d), float(rear_w)) in available_sizes
+            )
+
+            if front_ok and rear_ok:
+                filtered.append(fitment)
+
+        return filtered
 
     def _build_summaries(
         self,
