@@ -742,7 +742,22 @@ def _lookup_known_specs(
             "min_offset": 30,
             "max_offset": 55,
         },
-        ("wrx", None): {  # Pre-2015 WRX
+        # 2004-2014 WRX STI — always 5x114.3 (different from base WRX)
+        ("wrx sti", None): {
+            "bolt_pattern": "5x114.3",
+            "center_bore": 56.1,
+            "stud_size": "M12x1.25",
+            "oem_diameter": 17,
+            "min_diameter": 17,
+            "max_diameter": 19,
+            "oem_width": 8.0,
+            "min_width": 7.5,
+            "max_width": 10.0,
+            "oem_offset": 53,
+            "min_offset": 30,
+            "max_offset": 55,
+        },
+        ("wrx", None): {  # Pre-2015 WRX (non-STI)
             "bolt_pattern": "5x100",
             "center_bore": 56.1,
             "stud_size": "M12x1.25",
@@ -759,6 +774,13 @@ def _lookup_known_specs(
     }
 
     if make_lower == "subaru":
+        # Check STI specifically first (more specific model)
+        if "sti" in model_lower:
+            for (m, c), specs in subaru_specs.items():
+                if "sti" in m:
+                    if c is None or (chassis_upper and c.upper() == chassis_upper):
+                        return specs
+        # Then check generic WRX
         for (m, c), specs in subaru_specs.items():
             if model_lower in m or m in model_lower:
                 if c is None or (chassis_upper and c.upper() == chassis_upper):
@@ -1221,6 +1243,205 @@ def _lookup_known_specs(
             "min_offset": -12,
             "max_offset": 44,
         }
+
+    # Jeep specs
+    if make_lower == "jeep":
+        if "wrangler" in model_lower:
+            # JK (2007-2018) and JL (2018+) use 5x127 (5x5")
+            return {
+                "bolt_pattern": "5x127",
+                "center_bore": 71.5,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 20,
+                "oem_width": 7.5,
+                "min_width": 7.0,
+                "max_width": 10.0,
+                "oem_offset": -12,
+                "min_offset": -24,
+                "max_offset": 15,
+            }
+        if "gladiator" in model_lower:
+            return {
+                "bolt_pattern": "5x127",
+                "center_bore": 71.5,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 20,
+                "oem_width": 7.5,
+                "min_width": 7.0,
+                "max_width": 10.0,
+                "oem_offset": -12,
+                "min_offset": -24,
+                "max_offset": 15,
+            }
+        if "grand cherokee" in model_lower:
+            return {
+                "bolt_pattern": "5x127",
+                "center_bore": 71.5,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 8.0,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 34,
+                "min_offset": 15,
+                "max_offset": 45,
+            }
+
+    # GMC specs
+    if make_lower == "gmc":
+        if "sierra" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 78.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 7.5,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 28,
+                "min_offset": -12,
+                "max_offset": 44,
+            }
+        if "canyon" in model_lower:
+            return {
+                "bolt_pattern": "6x120",
+                "center_bore": 67.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 16,
+                "max_diameter": 20,
+                "oem_width": 7.0,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 28,
+                "min_offset": 0,
+                "max_offset": 40,
+            }
+
+    # More Toyota trucks
+    if make_lower == "toyota":
+        if "tundra" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 106.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 8.0,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 50,
+                "min_offset": -12,
+                "max_offset": 60,
+            }
+        if "4runner" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 106.1,
+                "stud_size": "M12x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 16,
+                "max_diameter": 20,
+                "oem_width": 7.0,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 15,
+                "min_offset": -10,
+                "max_offset": 35,
+            }
+
+    # Nissan trucks
+    if make_lower == "nissan":
+        if "frontier" in model_lower:
+            return {
+                "bolt_pattern": "6x114.3",
+                "center_bore": 66.1,
+                "stud_size": "M12x1.25",
+                "oem_diameter": 16,
+                "min_diameter": 16,
+                "max_diameter": 18,
+                "oem_width": 7.0,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 30,
+                "min_offset": 0,
+                "max_offset": 40,
+            }
+        if "titan" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 77.8,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 18,
+                "min_diameter": 17,
+                "max_diameter": 22,
+                "oem_width": 8.0,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 20,
+                "min_offset": -12,
+                "max_offset": 44,
+            }
+
+    # More Ford trucks
+    if make_lower == "ford":
+        if "ranger" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 93.1,
+                "stud_size": "M12x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 16,
+                "max_diameter": 20,
+                "oem_width": 7.5,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 40,
+                "min_offset": 0,
+                "max_offset": 50,
+            }
+        if "bronco" in model_lower:
+            return {
+                "bolt_pattern": "6x139.7",
+                "center_bore": 93.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 17,
+                "max_diameter": 20,
+                "oem_width": 8.0,
+                "min_width": 7.5,
+                "max_width": 10.0,
+                "oem_offset": 25,
+                "min_offset": -10,
+                "max_offset": 40,
+            }
+
+    # More Chevy trucks
+    if make_lower in ("chevrolet", "chevy"):
+        if "colorado" in model_lower:
+            return {
+                "bolt_pattern": "6x120",
+                "center_bore": 67.1,
+                "stud_size": "M14x1.5",
+                "oem_diameter": 17,
+                "min_diameter": 16,
+                "max_diameter": 20,
+                "oem_width": 7.0,
+                "min_width": 7.0,
+                "max_width": 9.0,
+                "oem_offset": 28,
+                "min_offset": 0,
+                "max_offset": 40,
+            }
 
     # Tesla specs
     if make_lower == "tesla":
