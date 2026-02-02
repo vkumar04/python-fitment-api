@@ -1165,11 +1165,22 @@ class FitmentPipeline(dspy.Module):
         if parsed_info.get("suspension"):
             vehicle_summary += f" on {parsed_info['suspension']}"
 
-        # Hub ring note: Kansei wheels are 73.1mm, vehicle may differ
+        # Hub bore compatibility check
         hub_ring_note = ""
         center_bore = specs.get("center_bore", 0)
-        if center_bore and center_bore != 73.1:
-            hub_ring_note = f"\nHub rings needed: 73.1mm (Kansei) → {center_bore}mm (vehicle)"
+        kansei_bore = 73.1
+
+        if center_bore and center_bore != kansei_bore:
+            if center_bore < kansei_bore:
+                # Wheel bore larger than hub = hub rings work
+                hub_ring_note = f"\nHub rings needed: {kansei_bore}mm → {center_bore}mm"
+            else:
+                # Wheel bore smaller than hub = INCOMPATIBLE
+                hub_ring_note = (
+                    f"\n⚠️ Standard Kansei wheels ({kansei_bore}mm bore) are NOT compatible "
+                    f"with this vehicle's {center_bore}mm hub. Hub rings will NOT work. "
+                    f"Hub-specific SKUs or professional machining required."
+                )
 
         specs_summary = f"""Bolt Pattern: {specs.get("bolt_pattern", "Unknown")}
 Center Bore: {center_bore}mm{hub_ring_note}

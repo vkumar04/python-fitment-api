@@ -295,11 +295,23 @@ def build_user_prompt(
     """Build the user prompt with vehicle context and retrieved data."""
     trim_info = f" ({trim})" if trim else ""
     center_bore_str = f"{center_bore}" if center_bore else "unknown"
-    hub_ring_note = (
-        f"Hub ring: may be needed (73.1 → {center_bore_str}mm) if wheel bore is larger than hub"
-        if center_bore and center_bore != 73.1
-        else ""
-    )
+    kansei_bore = 73.1
+    hub_incompatible = False
+
+    if center_bore and center_bore != kansei_bore:
+        if center_bore < kansei_bore:
+            # Wheel bore larger than hub = hub rings work
+            hub_ring_note = f"Hub rings needed: {kansei_bore}mm → {center_bore}mm"
+        else:
+            # Wheel bore smaller than hub = INCOMPATIBLE
+            hub_ring_note = (
+                f"⚠️ INCOMPATIBLE: {kansei_bore}mm Kansei bore cannot fit {center_bore}mm hub. "
+                f"Hub rings will NOT work. Hub-specific SKUs or machining required."
+            )
+            hub_incompatible = True
+    else:
+        hub_ring_note = ""
+
     suspension_info = f"- User's Suspension: {suspension}\n" if suspension else ""
 
     # Determine if we should ask for fitment style or give recommendations

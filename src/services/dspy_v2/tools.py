@@ -200,6 +200,26 @@ def _lookup_known_specs(
             "min_offset": 10,
             "max_offset": 35,
         },
+        # E39 M5 (1998-2003) - uses 74.1mm hub bore (NOT 72.6mm like most BMW 5x120)
+        # Standard 73.1mm Kansei wheels are INCOMPATIBLE - hub-specific SKUs required
+        # OEM: 18x8 +20 front, 18x9.5 +22 rear (Style 65 "M Parallels")
+        # Safe aftermarket: +32 to +45 offset range, 18-19" max
+        ("m5", "E39"): {
+            "bolt_pattern": "5x120",
+            "center_bore": 74.1,
+            "stud_size": "M12x1.5",
+            "year_start": 1998,
+            "year_end": 2003,
+            "oem_diameter": 18,
+            "min_diameter": 17,
+            "max_diameter": 19,  # 20" is show-only, not recommended
+            "oem_width": 8.0,
+            "min_width": 8.0,
+            "max_width": 10.5,  # 10.5" rear max
+            "oem_offset": 20,  # OEM was +20/+22 staggered
+            "min_offset": 32,  # Safe minimum for no-mod fitment
+            "max_offset": 45,  # Conservative max
+        },
     }
 
     bmw_specs = {
@@ -301,15 +321,17 @@ def _lookup_known_specs(
             "bolt_pattern": "5x120",
             "center_bore": 74.1,  # E39 uniquely uses 74.1mm, not 72.6mm
             "stud_size": "M12x1.5",
+            "year_start": 1996,
+            "year_end": 2003,
             "oem_diameter": 16,
             "min_diameter": 16,
             "max_diameter": 19,
             "oem_width": 7.0,
             "min_width": 7.0,
-            "max_width": 10.0,
+            "max_width": 9.5,
             "oem_offset": 20,
-            "min_offset": 5,
-            "max_offset": 35,
+            "min_offset": 32,  # Safe minimum for E39
+            "max_offset": 45,
         },
         "E46": {
             **_bmw_5x120,
