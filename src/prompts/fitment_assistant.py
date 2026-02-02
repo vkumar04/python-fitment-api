@@ -265,24 +265,35 @@ CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bor
 CRITICAL: When hub bore is incompatible (case 3), keep the response SHORT. Do not list setups, do not show Kansei wheel options. Just explain the incompatibility and suggest contacting Kansei for hub-specific SKUs."""
 
 
-def _has_fitment_style(query: str) -> bool:
-    """Check if query already specifies a fitment style."""
+def _extract_style(query: str) -> str | None:
+    """Extract the fitment style from query, normalized to flush/aggressive/track/tucked."""
     query_lower = query.lower()
-    style_keywords = [
-        "flush", "aggressive", "track", "performance", "stance", "tucked",
-        "poke", "daily", "conservative", "safe", "mild", "show", "meaty"
-    ]
-    return any(kw in query_lower for kw in style_keywords)
+    # Check for style keywords and normalize
+    if any(kw in query_lower for kw in ["flush", "daily", "conservative", "safe"]):
+        return "flush"
+    if any(kw in query_lower for kw in ["aggressive", "stance", "poke", "show"]):
+        return "aggressive"
+    if any(kw in query_lower for kw in ["track", "performance", "grip"]):
+        return "track"
+    if any(kw in query_lower for kw in ["tucked", "tuck"]):
+        return "tucked"
+    return None
 
 
-def _has_suspension(query: str) -> bool:
-    """Check if query already specifies suspension type."""
+def _extract_suspension(query: str) -> str | None:
+    """Extract suspension type from query, normalized to stock/lowered/coilovers/air/lifted."""
     query_lower = query.lower()
-    suspension_keywords = [
-        "stock", "lowered", "coilovers", "coils", "air", "bagged",
-        "springs", "slammed", "lifted", "oem", "factory"
-    ]
-    return any(kw in query_lower for kw in suspension_keywords)
+    if any(kw in query_lower for kw in ["stock", "oem", "factory"]):
+        return "stock"
+    if any(kw in query_lower for kw in ["lowered", "springs", "dropped"]):
+        return "lowered"
+    if any(kw in query_lower for kw in ["coilovers", "coils", "slammed"]):
+        return "coilovers"
+    if any(kw in query_lower for kw in ["air", "bagged"]):
+        return "air"
+    if any(kw in query_lower for kw in ["lifted", "leveled"]):
+        return "lifted"
+    return None
 
 
 def build_user_prompt(
@@ -334,30 +345,30 @@ def build_user_prompt(
 **IMPORTANT:** Hub bore is incompatible. Do NOT list wheel setups or Kansei options.
 Give a SHORT response explaining the incompatibility and direct them to contact Kansei for hub-specific SKUs."""
 
-    # Determine if we should ask for fitment style or give recommendations
-    has_style = _has_fitment_style(query)
-    has_susp = _has_suspension(query) or suspension is not None
+    # Extract what the user has told us
+    style = _extract_style(query)
+    susp = _extract_suspension(query) or suspension  # Use passed-in suspension if query doesn't have it
 
-    if has_style and has_susp:
-        # User specified BOTH style and suspension — go straight to recommendations
-        instruction = "**INSTRUCTION:** User specified BOTH fitment style AND suspension. SKIP ALL QUESTIONS. Present the PRE-COMPUTED RECOMMENDATION below IMMEDIATELY. Do NOT ask any questions."
-    elif has_style:
-        # User specified style but not suspension
-        # For flush, we can give recommendations; for aggressive/track, ask suspension
-        if any(kw in query.lower() for kw in ["flush", "daily", "conservative", "safe"]):
-            instruction = "**INSTRUCTION:** User wants FLUSH fitment. SKIP suspension question. Present the PRE-COMPUTED RECOMMENDATION below. Do NOT ask any questions."
-        else:
-            instruction = "**INSTRUCTION:** User specified aggressive/track style but NOT suspension. ASK about suspension (stock/lowered/coilovers/air) before giving specs."
+    # Decide what to do based on what we know
+    # FLUSH doesn't need suspension info - it's meant to work on stock
+    # AGGRESSIVE/TRACK need suspension to give accurate recommendations
+
+    if style == "flush":
+        # Flush fitment - give recommendations immediately (assumes stock-friendly)
+        instruction = "User wants FLUSH fitment. Give them the wheel recommendation below. No more questions needed."
+        recommendations_section = f"\n\n{recommended_setups}" if recommended_setups else ""
+    elif style in ("aggressive", "track", "tucked") and susp:
+        # They told us both style and suspension - give recommendations
+        instruction = f"User wants {style.upper()} fitment on {susp.upper()} suspension. Give them the wheel recommendation below."
+        recommendations_section = f"\n\n{recommended_setups}" if recommended_setups else ""
+    elif style in ("aggressive", "track", "tucked"):
+        # They picked a style but we need suspension info
+        instruction = f"User wants {style.upper()} fitment but hasn't said what suspension they have. Ask: Stock, Lowered, Coilovers, or Air?"
+        recommendations_section = ""
     else:
-        instruction = "**INSTRUCTION:** User did NOT specify a fitment style. ASK what style they want (flush/aggressive/track) before recommending ANY setups. Do NOT list wheel specs yet."
-
-    # Include pre-computed recommendations if user specified style (and suspension for non-flush)
-    recommendations_section = ""
-    if has_style and recommended_setups:
-        recommendations_section = f"""
-
-{recommended_setups}
-"""
+        # No style specified - ask what look they want
+        instruction = "User hasn't said what fitment style they want. Ask: Flush, Aggressive, or Track?"
+        recommendations_section = ""
 
     return f"""**USER QUERY:** {query}
 
