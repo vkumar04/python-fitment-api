@@ -31,9 +31,10 @@ class ParseVehicleInput(dspy.Signature):
     - "lifted", "leveled" = lifted
 
     FITMENT STYLE KEYWORDS:
-    - "flush", "fitted" = flush
+    - "flush", "fitted", "daily" = flush
     - "aggressive", "poke", "stance" = aggressive
     - "tucked", "tuck" = tucked
+    - "track", "performance", "grip" = track
     """
 
     user_input: str = dspy.InputField(desc="Raw user query about wheel fitment")
@@ -57,7 +58,7 @@ class ParseVehicleInput(dspy.Signature):
     suspension: Literal["stock", "lowered", "coilovers", "air", "lifted"] | None = (
         dspy.OutputField(desc="Suspension type if mentioned. None if not specified.")
     )
-    fitment_style: Literal["flush", "aggressive", "tucked"] | None = dspy.OutputField(
+    fitment_style: Literal["flush", "aggressive", "tucked", "track"] | None = dspy.OutputField(
         desc="Desired fitment style if mentioned. None if not specified."
     )
     is_valid_input: bool = dspy.OutputField(
