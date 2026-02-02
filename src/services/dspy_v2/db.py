@@ -8,26 +8,7 @@ All functions are **synchronous** because the pipeline runs inside
 from typing import Any
 
 from ...db.client import get_supabase_client as _get_client
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert value to float."""
-    if val is None:
-        return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
-
-
-def _safe_int(val: Any, default: int = 0) -> int:
-    """Safely convert value to int."""
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from ...utils.converters import safe_float as _safe_float, safe_int as _safe_int
 
 
 # -----------------------------------------------------------------------------
@@ -485,12 +466,6 @@ def generate_recommended_setups(
 
     susp = (suspension or "stock").lower()
 
-    # Determine if this is a flush/daily request (use conservative tire sizing)
-    is_conservative = False
-    if fitment_style:
-        style_lower = fitment_style.lower()
-        is_conservative = style_lower in ("flush", "daily", "conservative", "safe", "track", "performance")
-
     # Categorize by fitment style using consistent thresholds:
     # - flush: poke < 10mm (matches calculate_wheel_fitment thresholds)
     # - mild poke: 10mm <= poke < 20mm
@@ -512,25 +487,20 @@ def generate_recommended_setups(
 
     # Select wheels based on style preference with STRICT filtering
     target_wheels = []
-    style_label = "unknown"
 
     if fitment_style:
         style_lower = fitment_style.lower()
         if style_lower in ("flush", "daily", "conservative", "safe"):
             target_wheels = flush_wheels
-            style_label = "flush"
             # Only fall back to mild poke if user is okay with it
             if not target_wheels:
                 # No flush wheels available - don't silently recommend aggressive
                 return _no_matching_style_message("flush", mild_poke_wheels, aggressive_wheels)
         elif style_lower in ("aggressive", "poke", "stance", "show"):
             target_wheels = aggressive_wheels or mild_poke_wheels
-            style_label = "aggressive"
-            is_conservative = False  # Aggressive can use wider tires
         elif style_lower in ("track", "performance"):
             # Track/performance: prefer flush/mild for grip, not extreme poke
             target_wheels = flush_wheels or mild_poke_wheels
-            style_label = "track"
         else:
             target_wheels = flush_wheels or mild_poke_wheels or aggressive_wheels
     else:
@@ -621,7 +591,7 @@ def _no_matching_style_message(
     lines = ["## PRE-COMPUTED RECOMMENDATIONS", ""]
 
     if requested_style == "flush":
-        lines.append(f"**No true flush options available** for this vehicle with Kansei wheels.")
+        lines.append("**No true flush options available** for this vehicle with Kansei wheels.")
         lines.append("")
         if mild_poke_wheels:
             # Show what IS available as an alternative
@@ -647,50 +617,6 @@ def _no_matching_style_message(
     lines.append("IMPORTANT: Be honest with the user that flush fitment is not achievable with available wheels.")
 
     return "\n".join(lines)
-
-
-def _get_tire_width(wheel_width: float, conservative: bool = False) -> int:
-    """Get recommended tire width for a wheel width.
-
-    Args:
-        wheel_width: Wheel width in inches
-        conservative: If True, use narrower tire for better clearance
-                     (safer for daily/flush fitments, especially on classic cars)
-
-    Standard vs Conservative:
-    - 9" wheel: 245mm standard, 225mm conservative (E30 M3, etc)
-    - 9.5" wheel: 255mm standard, 245mm conservative
-    """
-    if conservative:
-        # Conservative sizing - prioritizes clearance over grip
-        # Good for daily/flush fitments and classic cars
-        width_to_tire = {
-            7.0: 195,
-            7.5: 205,
-            8.0: 215,
-            8.5: 225,
-            9.0: 225,  # 225/40/17 proven safe on E30 M3
-            9.5: 245,  # 245/35/18 proper fit
-            10.0: 265,
-            10.5: 275,
-            11.0: 285,
-        }
-    else:
-        # Standard sizing - fills the wheel properly
-        width_to_tire = {
-            7.0: 205,
-            7.5: 215,
-            8.0: 225,
-            8.5: 235,
-            9.0: 235,  # 235/40/17 is full, 245 is stretched
-            9.5: 245,  # 245/35/18 ideal (not 255 which is too wide)
-            10.0: 265,
-            10.5: 275,
-            11.0: 295,
-        }
-    # Find closest match
-    closest = min(width_to_tire.keys(), key=lambda x: abs(x - wheel_width))
-    return width_to_tire[closest]
 
 
 def _get_tire_for_suspension(
@@ -719,7 +645,9 @@ def _get_tire_for_suspension(
     - is_safe: whether this combo is safe for the suspension
     """
     susp = (suspension or "stock").lower()
-    style = (fitment_style or "flush").lower()
+    # fitment_style is not currently used but may be in the future
+    # for style-specific tire recommendations
+    _ = fitment_style
 
     # Determine aspect ratio based on wheel diameter
     # Lower profile = less sidewall = less rub risk when lowered

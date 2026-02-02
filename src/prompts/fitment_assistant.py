@@ -1,5 +1,7 @@
 """System prompts for the Kansei Fitment Assistant."""
 
+from ..utils.vehicle_parsing import extract_style, extract_suspension
+
 SYSTEM_PROMPT = """You are the Kansei Wheels Fitment Assistant. You help customers figure out if Kansei wheels will fit their vehicle.
 
 ## IDENTITY
@@ -248,37 +250,6 @@ CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bor
 CRITICAL: When hub bore is incompatible (case 3), keep the response SHORT. Do not list setups, do not show Kansei wheel options. Just explain the incompatibility and suggest contacting Kansei for hub-specific SKUs."""
 
 
-def _extract_style(query: str) -> str | None:
-    """Extract the fitment style from query, normalized to flush/aggressive/track/tucked."""
-    query_lower = query.lower()
-    # Check for style keywords and normalize
-    if any(kw in query_lower for kw in ["flush", "daily", "conservative", "safe"]):
-        return "flush"
-    if any(kw in query_lower for kw in ["aggressive", "stance", "poke", "show"]):
-        return "aggressive"
-    if any(kw in query_lower for kw in ["track", "performance", "grip"]):
-        return "track"
-    if any(kw in query_lower for kw in ["tucked", "tuck"]):
-        return "tucked"
-    return None
-
-
-def _extract_suspension(query: str) -> str | None:
-    """Extract suspension type from query, normalized to stock/lowered/coilovers/air/lifted."""
-    query_lower = query.lower()
-    if any(kw in query_lower for kw in ["stock", "oem", "factory"]):
-        return "stock"
-    if any(kw in query_lower for kw in ["lowered", "springs", "dropped"]):
-        return "lowered"
-    if any(kw in query_lower for kw in ["coilovers", "coils", "slammed"]):
-        return "coilovers"
-    if any(kw in query_lower for kw in ["air", "bagged"]):
-        return "air"
-    if any(kw in query_lower for kw in ["lifted", "leveled"]):
-        return "lifted"
-    return None
-
-
 def build_user_prompt(
     query: str,
     vehicle_info: str,
@@ -328,9 +299,9 @@ def build_user_prompt(
 **IMPORTANT:** Hub bore is incompatible. Do NOT list wheel setups or Kansei options.
 Give a SHORT response explaining the incompatibility and direct them to contact Kansei for hub-specific SKUs."""
 
-    # Extract what the user has told us
-    style = _extract_style(query)
-    susp = _extract_suspension(query) or suspension  # Use passed-in suspension if query doesn't have it
+    # Extract what the user has told us (using centralized parsing)
+    style = extract_style(query)
+    susp = extract_suspension(query) or suspension  # Use passed-in suspension if query doesn't have it
 
     # Decide what to do based on what we know
     # FLUSH doesn't need suspension info - it's meant to work on stock

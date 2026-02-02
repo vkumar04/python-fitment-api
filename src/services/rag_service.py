@@ -7,7 +7,6 @@ Flow:
 
 import asyncio
 import json
-import re
 import uuid
 from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +18,13 @@ from ..core.config import get_settings
 from ..core.logging import log_error, log_external_call, logger
 from ..db import fitments as db
 from ..prompts.fitment_assistant import SYSTEM_PROMPT, build_user_prompt
+from ..utils.vehicle_parsing import (
+    extract_style,
+    extract_suspension,
+    has_vehicle_info,
+    STYLE_KEYWORDS,
+    SUSPENSION_KEYWORDS,
+)
 from .dspy_v2 import FitmentPipeline, create_pipeline
 from .retrieval_cache import RetrievalCache
 
@@ -51,92 +57,8 @@ class RAGService:
         return self._openai_client
 
     # -------------------------------------------------------------------------
-    # Conversation Context
+    # Conversation Context (uses centralized utils.vehicle_parsing)
     # -------------------------------------------------------------------------
-
-    @staticmethod
-    def _has_vehicle_info(text: str) -> bool:
-        """Check if text contains vehicle identifiers (year, make, or chassis code)."""
-        text_lower = text.lower()
-        words = set(text_lower.split())
-
-        # Year pattern (4-digit number between 1950-2030)
-        if re.search(r"\b(19[5-9]\d|20[0-3]\d)\b", text):
-            return True
-
-        # Known chassis codes
-        chassis_codes = {
-            # BMW
-            "e21", "e24", "e28", "e30", "e34", "e36", "e38", "e39",
-            "e46", "e53", "e60", "e82", "e90", "e92", "f10", "f30",
-            "f80", "f82", "g20", "g80", "g82",
-            # Honda
-            "fk2", "fk7", "fk8", "fl5", "dc2", "dc5",
-            # Nissan
-            "s13", "s14", "s15", "z32", "z33", "z34",
-            "r32", "r33", "r34", "r35",
-            # Subaru
-            "gc8", "va", "vb",
-            # Toyota
-            "ae86", "jza80", "a80", "a90",
-        }
-        if words & chassis_codes:
-            return True
-
-        # Common makes
-        makes = {
-            "acura", "audi", "bmw", "buick", "cadillac", "chevrolet", "chevy",
-            "chrysler", "dodge", "ford", "genesis", "gmc", "honda", "hyundai",
-            "infiniti", "jaguar", "jeep", "kia", "lexus", "lincoln", "mazda",
-            "mercedes", "mini", "mitsubishi", "nissan", "pontiac", "porsche",
-            "ram", "scion", "subaru", "tesla", "toyota", "volkswagen", "vw",
-            "volvo",
-        }
-        if words & makes:
-            return True
-
-        return False
-
-    # Style keywords the user might say
-    STYLE_KEYWORDS = {"flush", "aggressive", "track", "performance", "stance", "tucked", "poke", "daily"}
-    # Suspension keywords the user might say
-    SUSPENSION_KEYWORDS = {"stock", "lowered", "coilovers", "coils", "air", "bagged", "springs", "slammed", "lifted"}
-
-    @staticmethod
-    def _extract_style(text: str) -> str | None:
-        """Extract fitment style from text if present."""
-        text_lower = text.lower()
-        for word in text_lower.split():
-            if word in RAGService.STYLE_KEYWORDS:
-                # Normalize to canonical style names
-                if word in ("flush", "daily"):
-                    return "flush"
-                if word in ("aggressive", "stance", "poke"):
-                    return "aggressive"
-                if word in ("track", "performance"):
-                    return "track"
-                if word == "tucked":
-                    return "tucked"
-        return None
-
-    @staticmethod
-    def _extract_suspension(text: str) -> str | None:
-        """Extract suspension type from text if present."""
-        text_lower = text.lower()
-        for word in text_lower.split():
-            if word in RAGService.SUSPENSION_KEYWORDS:
-                # Normalize to canonical suspension names
-                if word in ("stock",):
-                    return "stock"
-                if word in ("lowered", "springs"):
-                    return "lowered"
-                if word in ("coilovers", "coils", "slammed"):
-                    return "coilovers"
-                if word in ("air", "bagged"):
-                    return "air"
-                if word == "lifted":
-                    return "lifted"
-        return None
 
     def _augment_query_with_history(
         self,
@@ -159,7 +81,7 @@ class RAGService:
             return query
 
         # If the query already has vehicle info, it's a fresh conversation
-        if self._has_vehicle_info(query):
+        if has_vehicle_info(query):
             return query
 
         # Collect all context from conversation history
@@ -175,26 +97,26 @@ class RAGService:
             content = msg["content"].strip()
 
             # Check for vehicle info
-            if self._has_vehicle_info(content):
+            if has_vehicle_info(content):
                 vehicle = content
 
             # Check for style (only if we don't have one yet)
             if style is None:
-                found_style = self._extract_style(content)
+                found_style = extract_style(content)
                 if found_style:
                     style = found_style
 
             # Check for suspension (only if we don't have one yet)
             if suspension is None:
-                found_susp = self._extract_suspension(content)
+                found_susp = extract_suspension(content)
                 if found_susp:
                     suspension = found_susp
 
         # Also check the current query for style/suspension
         if style is None:
-            style = self._extract_style(query)
+            style = extract_style(query)
         if suspension is None:
-            suspension = self._extract_suspension(query)
+            suspension = extract_suspension(query)
 
         # Build the combined query
         if vehicle:
@@ -204,7 +126,8 @@ class RAGService:
             if suspension:
                 parts.append(suspension)
             # Only add current query if it has new info (not just style/suspension we already captured)
-            if query not in (style, suspension) and query not in self.STYLE_KEYWORDS and query not in self.SUSPENSION_KEYWORDS:
+            query_lower = query.lower().strip()
+            if query_lower not in (style, suspension) and query_lower not in STYLE_KEYWORDS and query_lower not in SUSPENSION_KEYWORDS:
                 parts.append(query)
             return " ".join(parts)
 

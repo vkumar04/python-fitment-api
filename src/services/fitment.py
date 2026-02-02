@@ -1,9 +1,98 @@
-"""Fitment analysis and classification utilities."""
+"""Fitment analysis and classification utilities.
+
+This module provides geometry-based fitment calculations. The core math:
+
+    poke_mm = (wheel_width - oem_width) * 25.4 / 2 + (oem_offset - wheel_offset)
+
+Where:
+- Positive poke = wheel sticks out past fender
+- Negative poke = wheel is tucked under fender
+- Zero = flush with fender line
+
+Thresholds (consistent across codebase):
+- Flush: poke < 10mm
+- Mild poke: 10mm <= poke < 20mm
+- Aggressive: poke >= 20mm
+"""
 
 from typing import Any
 
 from ..utils.converters import safe_float
 
+
+# =============================================================================
+# CONSTANTS (single source of truth for thresholds)
+# =============================================================================
+
+# Poke thresholds in mm
+FLUSH_THRESHOLD = 10      # < 10mm = flush
+MILD_POKE_THRESHOLD = 20  # 10-20mm = mild poke, >= 20mm = aggressive
+
+# Default OEM specs when not provided (conservative assumptions)
+DEFAULT_OEM_WIDTH = 7.5   # inches
+DEFAULT_OEM_OFFSET = 35   # mm
+
+
+# =============================================================================
+# CORE GEOMETRY CALCULATIONS
+# =============================================================================
+
+def calculate_poke(
+    wheel_width: float,
+    wheel_offset: float,
+    oem_width: float = DEFAULT_OEM_WIDTH,
+    oem_offset: float = DEFAULT_OEM_OFFSET,
+) -> float:
+    """Calculate poke in mm using geometry.
+
+    The formula accounts for both width change AND offset change:
+    - Wider wheel pushes mounting face inward (more poke)
+    - Lower offset moves wheel outward (more poke)
+
+    Args:
+        wheel_width: Aftermarket wheel width in inches
+        wheel_offset: Aftermarket wheel offset in mm
+        oem_width: Factory wheel width in inches
+        oem_offset: Factory wheel offset in mm
+
+    Returns:
+        Poke in mm (positive = sticks out, negative = tucked)
+
+    Examples:
+        >>> calculate_poke(9.0, 35, 7.5, 35)  # Wider wheel, same offset
+        19.05  # ~19mm poke from width alone
+        >>> calculate_poke(7.5, 22, 7.5, 35)  # Same width, lower offset
+        13.0   # 13mm poke from offset alone
+    """
+    width_diff_inches = wheel_width - oem_width
+    width_diff_mm = width_diff_inches * 25.4
+    width_contribution = width_diff_mm / 2  # Half goes to each side
+
+    offset_contribution = oem_offset - wheel_offset  # Lower offset = more poke
+
+    return width_contribution + offset_contribution
+
+
+def classify_poke(poke_mm: float) -> str:
+    """Classify poke amount into style category.
+
+    Args:
+        poke_mm: Calculated poke in mm
+
+    Returns:
+        'flush', 'mild_poke', or 'aggressive'
+    """
+    if poke_mm < FLUSH_THRESHOLD:
+        return "flush"
+    elif poke_mm < MILD_POKE_THRESHOLD:
+        return "mild_poke"
+    else:
+        return "aggressive"
+
+
+# =============================================================================
+# ROW-BASED ANALYSIS (for CSV/database records)
+# =============================================================================
 
 def determine_setup(row: dict[str, Any]) -> str:
     """Determine if fitment is square or staggered."""
@@ -24,30 +113,48 @@ def determine_setup(row: dict[str, Any]) -> str:
 
 
 def determine_style(row: dict[str, Any]) -> str:
-    """Determine fitment style based on offset and width."""
-    front_offset = safe_float(row.get("front_offset"))
-    rear_offset = safe_float(row.get("rear_offset"))
+    """Determine fitment style using geometry-based poke calculation.
+
+    Uses the average poke of front and rear wheels.
+    """
     front_width = safe_float(row.get("front_width"))
     rear_width = safe_float(row.get("rear_width"))
+    front_offset = safe_float(row.get("front_offset"))
+    rear_offset = safe_float(row.get("rear_offset"))
 
-    avg_offset = (front_offset + rear_offset) / 2
-    avg_width = (front_width + rear_width) / 2
+    # Calculate poke for front and rear
+    front_poke = calculate_poke(front_width, front_offset)
+    rear_poke = calculate_poke(rear_width, rear_offset)
 
-    if avg_offset < 15 and avg_width >= 9:
-        return "aggressive"
-    elif avg_offset < 25:
+    # Use the more aggressive (higher poke) value
+    max_poke = max(front_poke, rear_poke)
+
+    style = classify_poke(max_poke)
+
+    # Map internal classification to display style
+    if style == "flush":
         return "flush"
-    elif avg_offset >= 40:
-        return "tucked"
+    elif style == "mild_poke":
+        return "flush"  # Mild poke is still presentable as flush-ish
     else:
-        return "flush"
+        return "aggressive"
 
 
 def has_poke(row: dict[str, Any]) -> bool:
-    """Determine if wheels poke past fender."""
+    """Determine if wheels poke past fender using geometry.
+
+    Uses proper poke calculation instead of simple offset threshold.
+    """
+    front_width = safe_float(row.get("front_width"))
+    rear_width = safe_float(row.get("rear_width"))
     front_offset = safe_float(row.get("front_offset"))
     rear_offset = safe_float(row.get("rear_offset"))
-    return front_offset < 20 or rear_offset < 20
+
+    front_poke = calculate_poke(front_width, front_offset)
+    rear_poke = calculate_poke(rear_width, rear_offset)
+
+    # Any wheel with >= 10mm poke is considered "poking"
+    return front_poke >= FLUSH_THRESHOLD or rear_poke >= FLUSH_THRESHOLD
 
 
 def needs_modifications(row: dict[str, Any]) -> bool:
