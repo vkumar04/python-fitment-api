@@ -722,9 +722,11 @@ class FitmentPipeline(dspy.Module):
         kansei_str = db.format_kansei_for_prompt(validated_wheels["valid"])
 
         # Generate pre-computed recommendations using math
+        # Tire sizing now accounts for suspension type (bagged = narrow tires)
         recommended_setups_str = db.generate_recommended_setups(
             validated_wheels["valid"],
             fitment_style=parsed_info.get("fitment_style"),
+            suspension=parsed_info.get("suspension"),
         )
 
         return RetrievalResult(
