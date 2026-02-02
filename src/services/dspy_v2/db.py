@@ -8,26 +8,7 @@ All functions are **synchronous** because the pipeline runs inside
 from typing import Any
 
 from ...db.client import get_supabase_client as _get_client
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert value to float."""
-    if val is None:
-        return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
-
-
-def _safe_int(val: Any, default: int = 0) -> int:
-    """Safely convert value to int."""
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from ...utils.converters import safe_float as _safe_float, safe_int as _safe_int
 
 
 # -----------------------------------------------------------------------------
@@ -460,15 +441,22 @@ def format_kansei_for_prompt(wheels: list[dict[str, Any]]) -> str:
 def generate_recommended_setups(
     wheels: list[dict[str, Any]],
     fitment_style: str | None = None,
+    suspension: str | None = None,
 ) -> str:
     """Generate pre-computed setup recommendations using math.
 
     This produces concrete recommendations that OpenAI should present verbatim,
     rather than letting OpenAI invent specs.
 
+    The tire sizing now accounts for BOTH style AND suspension:
+    - Flush + Stock = standard sizing
+    - Aggressive + Bagged = narrow tires to clear when aired out
+    - Track + Coilovers = narrow tires for compression clearance
+
     Args:
         wheels: List of validated Kansei wheels with fitment_calc data
         fitment_style: User's desired style (flush/aggressive/track)
+        suspension: User's suspension type (stock/lowered/coilovers/air)
 
     Returns:
         Formatted string with 1-2 recommended setups
@@ -476,11 +464,7 @@ def generate_recommended_setups(
     if not wheels:
         return "(No Kansei wheels fit this vehicle)"
 
-    # Determine if this is a flush/daily request (use conservative tire sizing)
-    is_conservative = False
-    if fitment_style:
-        style_lower = fitment_style.lower()
-        is_conservative = style_lower in ("flush", "daily", "conservative", "safe", "track", "performance")
+    susp = (suspension or "stock").lower()
 
     # Categorize by fitment style using consistent thresholds:
     # - flush: poke < 10mm (matches calculate_wheel_fitment thresholds)
@@ -503,25 +487,20 @@ def generate_recommended_setups(
 
     # Select wheels based on style preference with STRICT filtering
     target_wheels = []
-    style_label = "unknown"
 
     if fitment_style:
         style_lower = fitment_style.lower()
         if style_lower in ("flush", "daily", "conservative", "safe"):
             target_wheels = flush_wheels
-            style_label = "flush"
             # Only fall back to mild poke if user is okay with it
             if not target_wheels:
                 # No flush wheels available - don't silently recommend aggressive
                 return _no_matching_style_message("flush", mild_poke_wheels, aggressive_wheels)
         elif style_lower in ("aggressive", "poke", "stance", "show"):
             target_wheels = aggressive_wheels or mild_poke_wheels
-            style_label = "aggressive"
-            is_conservative = False  # Aggressive can use wider tires
         elif style_lower in ("track", "performance"):
             # Track/performance: prefer flush/mild for grip, not extreme poke
             target_wheels = flush_wheels or mild_poke_wheels
-            style_label = "track"
         else:
             target_wheels = flush_wheels or mild_poke_wheels or aggressive_wheels
     else:
@@ -543,25 +522,28 @@ def generate_recommended_setups(
         mods = calc.get("mods_needed", [])
         url = w.get("url", "")
 
-        # Calculate correct tire size (conservative for flush/daily)
-        tire_width = _get_tire_width(width, conservative=is_conservative)
-        aspect = 35 if d >= 18 else 40
-
-        # Also calculate alternative tire option
-        alt_tire_width = _get_tire_width(width, conservative=not is_conservative)
+        # Calculate correct tire size based on BOTH style AND suspension
+        tire_calc = _get_tire_for_suspension(
+            wheel_width=width,
+            wheel_diameter=d,
+            suspension=susp,
+            fitment_style=fitment_style,
+        )
 
         square_setup = {
             "type": "Square",
             "front": f"{d}x{width} +{offset}",
             "rear": f"{d}x{width} +{offset}",
-            "tire": f"{tire_width}/{aspect}/{d}",
-            "tire_alt": f"{alt_tire_width}/{aspect}/{d}" if alt_tire_width != tire_width else None,
+            "tire": tire_calc["tire"],
+            "tire_alt": tire_calc["tire_alt"],
+            "tire_notes": tire_calc["notes"],
+            "sidewall_mm": tire_calc["sidewall_mm"],
             "poke": poke,
             "style": style,
             "mods": mods,
             "url": url,
             "model": w.get("model", ""),
-            "is_conservative": is_conservative,
+            "suspension": susp,
         }
         break
 
@@ -569,17 +551,22 @@ def generate_recommended_setups(
     lines = ["## PRE-COMPUTED RECOMMENDATIONS (use these exact specs)", ""]
 
     if square_setup:
-        lines.append(f"**Recommended Setup ({square_setup['style']})**")
+        susp_label = square_setup['suspension'].title()
+        lines.append(f"**Recommended Setup ({square_setup['style']}, {susp_label} suspension)**")
         lines.append(f"Front: {square_setup['front']} | Rear: {square_setup['rear']}")
-        lines.append(f"Tire: {square_setup['tire']} (recommended)")
+        lines.append(f"Tire: {square_setup['tire']} (recommended for {susp_label})")
+        lines.append(f"  → Sidewall: {square_setup['sidewall_mm']}mm | {square_setup['tire_notes']}")
         if square_setup['tire_alt']:
-            if square_setup['is_conservative']:
-                lines.append(f"Alternative: {square_setup['tire_alt']} (wider, may need fender work)")
-            else:
-                lines.append(f"Alternative: {square_setup['tire_alt']} (narrower, better clearance)")
+            lines.append(f"Alternative: {square_setup['tire_alt']} (only if you need more clearance)")
         lines.append(f"Calculated poke: {square_setup['poke']:+.0f}mm ({square_setup['style']})")
+
+        # Mods logic depends on suspension + tire combo
         if square_setup['mods']:
             lines.append(f"Mods needed: {', '.join(square_setup['mods'])}")
+        elif square_setup['suspension'] in ("air", "bagged", "bags"):
+            lines.append("Mods needed: None with recommended tire (WILL rub with wider tires)")
+        elif square_setup['suspension'] in ("coilovers", "coils", "slammed"):
+            lines.append("Mods needed: None with recommended tire (may rub with wider/taller tires)")
         else:
             lines.append("Mods needed: None (daily-safe)")
         if square_setup['url']:
@@ -604,7 +591,7 @@ def _no_matching_style_message(
     lines = ["## PRE-COMPUTED RECOMMENDATIONS", ""]
 
     if requested_style == "flush":
-        lines.append(f"**No true flush options available** for this vehicle with Kansei wheels.")
+        lines.append("**No true flush options available** for this vehicle with Kansei wheels.")
         lines.append("")
         if mild_poke_wheels:
             # Show what IS available as an alternative
@@ -632,45 +619,124 @@ def _no_matching_style_message(
     return "\n".join(lines)
 
 
-def _get_tire_width(wheel_width: float, conservative: bool = False) -> int:
-    """Get recommended tire width for a wheel width.
+def _get_tire_for_suspension(
+    wheel_width: float,
+    wheel_diameter: int,
+    suspension: str | None,
+    fitment_style: str | None,
+) -> dict[str, Any]:
+    """Calculate tire size based on wheel specs AND suspension type.
 
-    Args:
-        wheel_width: Wheel width in inches
-        conservative: If True, use narrower tire for better clearance
-                     (safer for daily/flush fitments, especially on classic cars)
+    The math:
+    - Sidewall height = tire_width × (aspect_ratio / 100)
+    - Total tire diameter = wheel_diameter_inches × 25.4 + (2 × sidewall_height)
+    - Taller tires = more rubbing risk when lowered/aired out
 
-    Standard vs Conservative:
-    - 9" wheel: 245mm standard, 225mm conservative (E30 M3, etc)
-    - 9.5" wheel: 255mm standard, 245mm conservative
+    Suspension affects clearance:
+    - Stock: most forgiving, can run taller tires (40 series on 17s)
+    - Lowered/Springs: 40-series borderline, go narrower
+    - Coilovers: needs clearance for compression, -10mm width recommended
+    - Air/Bagged: must clear when COMPRESSED (aired out + turning), safest to go narrow
+
+    Returns dict with:
+    - tire: recommended tire size string (e.g., "215/40/17")
+    - tire_alt: alternative tire option
+    - tire_notes: explanation of choice
+    - is_safe: whether this combo is safe for the suspension
     """
-    if conservative:
-        # Conservative sizing - prioritizes clearance over grip
-        # Good for daily/flush fitments and classic cars
-        width_to_tire = {
-            7.0: 195,
-            7.5: 205,
-            8.0: 215,
-            8.5: 225,
-            9.0: 225,  # 225/40/17 proven safe on E30 M3
-            9.5: 245,  # 245/35/18 proper fit
-            10.0: 265,
-            10.5: 275,
-            11.0: 285,
-        }
+    susp = (suspension or "stock").lower()
+    # fitment_style is not currently used but may be in the future
+    # for style-specific tire recommendations
+    _ = fitment_style
+
+    # Determine aspect ratio based on wheel diameter
+    # Lower profile = less sidewall = less rub risk when lowered
+    if wheel_diameter >= 19:
+        aspect_stock = 35
+        aspect_lowered = 30
+    elif wheel_diameter >= 18:
+        aspect_stock = 40
+        aspect_lowered = 35
+    else:  # 17" and below
+        aspect_stock = 45
+        aspect_lowered = 40
+
+    # Base tire width mappings
+    standard_widths = {
+        7.0: 205, 7.5: 215, 8.0: 225, 8.5: 235,
+        9.0: 235, 9.5: 245, 10.0: 265, 10.5: 275, 11.0: 295,
+    }
+    conservative_widths = {
+        7.0: 195, 7.5: 205, 8.0: 215, 8.5: 225,
+        9.0: 225, 9.5: 235, 10.0: 255, 10.5: 265, 11.0: 285,
+    }
+    aggressive_narrow_widths = {
+        # For bagged/coilovers - go 20mm narrower than conservative
+        7.0: 185, 7.5: 195, 8.0: 205, 8.5: 215,
+        9.0: 215, 9.5: 225, 10.0: 245, 10.5: 255, 11.0: 275,
+    }
+
+    closest_width = min(standard_widths.keys(), key=lambda x: abs(x - wheel_width))
+
+    # Determine tire based on suspension
+    if susp in ("stock", "oem", "factory"):
+        # Stock = most forgiving, can use standard sizing
+        tire_width = standard_widths[closest_width]
+        aspect = aspect_stock
+        alt_width = conservative_widths[closest_width]
+        alt_aspect = aspect_stock
+        notes = "Stock suspension - standard tire sizing is safe"
+        is_safe = True
+
+    elif susp in ("lowered", "springs", "dropped"):
+        # Springs = borderline, go conservative
+        tire_width = conservative_widths[closest_width]
+        aspect = aspect_lowered
+        alt_width = aggressive_narrow_widths[closest_width]
+        alt_aspect = aspect_lowered
+        notes = "Lowered - using narrower tire & lower profile to reduce rub"
+        is_safe = True
+
+    elif susp in ("coilovers", "coils", "slammed"):
+        # Coilovers = need compression clearance
+        tire_width = aggressive_narrow_widths[closest_width]
+        aspect = aspect_lowered
+        alt_width = conservative_widths[closest_width]
+        alt_aspect = aspect_lowered
+        notes = "Coilovers - narrow tire for compression clearance"
+        is_safe = True
+
+    elif susp in ("air", "bagged", "bags"):
+        # Bagged = MUST clear when aired out AND when turning
+        # This is the most restrictive - aired out ≠ driving height
+        tire_width = aggressive_narrow_widths[closest_width]
+        aspect = aspect_lowered
+        alt_width = aggressive_narrow_widths[closest_width]  # No wider option for bagged
+        alt_aspect = aspect_lowered
+        notes = "Bagged - narrow tire required for aired-out clearance"
+        is_safe = True
+
     else:
-        # Standard sizing - fills the wheel properly
-        width_to_tire = {
-            7.0: 205,
-            7.5: 215,
-            8.0: 225,
-            8.5: 235,
-            9.0: 235,  # 235/40/17 is full, 245 is stretched
-            9.5: 245,  # 245/35/18 ideal (not 255 which is too wide)
-            10.0: 265,
-            10.5: 275,
-            11.0: 295,
-        }
-    # Find closest match
-    closest = min(width_to_tire.keys(), key=lambda x: abs(x - wheel_width))
-    return width_to_tire[closest]
+        # Unknown suspension - be conservative
+        tire_width = conservative_widths[closest_width]
+        aspect = aspect_lowered
+        alt_width = standard_widths[closest_width]
+        alt_aspect = aspect_stock
+        notes = "Conservative sizing for unknown suspension"
+        is_safe = True
+
+    # Calculate sidewall heights for reference
+    sidewall_rec = tire_width * (aspect / 100)
+    sidewall_alt = alt_width * (alt_aspect / 100)
+
+    return {
+        "tire": f"{tire_width}/{aspect}/{wheel_diameter}",
+        "tire_alt": f"{alt_width}/{alt_aspect}/{wheel_diameter}" if alt_width != tire_width else None,
+        "tire_width": tire_width,
+        "tire_aspect": aspect,
+        "sidewall_mm": round(sidewall_rec, 1),
+        "alt_sidewall_mm": round(sidewall_alt, 1),
+        "notes": notes,
+        "is_safe": is_safe,
+        "suspension": susp,
+    }
