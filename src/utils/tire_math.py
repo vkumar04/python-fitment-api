@@ -62,16 +62,24 @@ TIRE_WIDTH_BY_WHEEL: dict[float, dict[str, int]] = {
 }
 
 # Aspect ratio recommendations by wheel diameter and suspension
-# Lower profile = shorter sidewall = less rub risk when lowered
+# For AFTERMARKET fitment on sports cars, we use lower profiles than OEM
+# because:
+# 1. Aftermarket wheels are typically wider than OEM
+# 2. Lower profile = better handling response
+# 3. Avoids the "balloon" look on wider wheels
+# 4. Classic sports cars (E30 M3, etc.) have shorter arches
+#
+# Example: E30 M3 OEM was 205/55R15 (~24.9" diameter)
+#          Aftermarket 17x8 should use 225/40R17 (~24.2") NOT 225/45R17 (~25.0")
 ASPECT_RATIO_BY_DIAMETER: dict[int, dict[str, int]] = {
-    15: {"stock": 55, "lowered": 50},
-    16: {"stock": 50, "lowered": 45},
-    17: {"stock": 45, "lowered": 40},
-    18: {"stock": 40, "lowered": 35},
-    19: {"stock": 35, "lowered": 30},
-    20: {"stock": 35, "lowered": 30},
-    21: {"stock": 30, "lowered": 25},
-    22: {"stock": 30, "lowered": 25},
+    15: {"stock": 50, "lowered": 45},  # 50-series max for 15" aftermarket
+    16: {"stock": 45, "lowered": 40},  # 45-series for 16"
+    17: {"stock": 40, "lowered": 35},  # 40-series for 17" (NOT 45!)
+    18: {"stock": 35, "lowered": 30},  # 35-series for 18"
+    19: {"stock": 30, "lowered": 25},  # 30-series for 19"
+    20: {"stock": 30, "lowered": 25},
+    21: {"stock": 25, "lowered": 25},
+    22: {"stock": 25, "lowered": 25},
 }
 
 # Poke thresholds for fitment classification (mm)
