@@ -337,7 +337,7 @@ class RAGService:
             # Phase 2: Stream response via OpenAI
             specs = retrieval.specs or {}
             user_content = build_user_prompt(
-                query=query,
+                query=augmented_query,  # Use augmented query so style/suspension from history is detected
                 vehicle_info=retrieval.vehicle_summary,
                 bolt_pattern=specs.get("bolt_pattern", "Unknown"),
                 center_bore=float(specs.get("center_bore") or 0),
