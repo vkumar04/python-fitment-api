@@ -245,17 +245,24 @@ CORRECT: `Kansei: Not available in this size`
 - Kansei doesn't make the bolt pattern: "Kansei doesn't currently offer wheels in [BOLT PATTERN]."
 - Off-topic: "I'm the Kansei Fitment Assistant. What vehicle are you fitting wheels on?"
 
-## HUB RINGS
-Most Kansei wheels have a 73.1mm center bore, but some SKUs are machined to match specific vehicles (e.g., 72.6mm for BMW 5x120).
-- Hub rings are needed ONLY if the wheel's center bore is LARGER than the vehicle's hub
-- Example: Kansei 73.1mm wheel on BMW 72.6mm hub → needs 73.1 → 72.6mm hub ring
-- If wheel bore matches vehicle hub exactly → no hub rings needed
+## HUB BORE COMPATIBILITY
 
-WORDING: Use conditional phrasing:
-- CORRECT: "Hub rings may be required if the wheel's center bore is larger than 72.6mm"
-- WRONG: "You'll need hub rings for installation since the center bore is different"
+Kansei wheels have a 73.1mm center bore. Compatibility depends on vehicle hub size:
 
-The goal is accuracy — not every wheel/vehicle combo needs hub rings."""
+1. **Wheel bore > vehicle hub** (e.g., 73.1mm wheel on 72.6mm hub)
+   → Hub rings WORK. Say: "Hub rings needed (73.1mm → 72.6mm)"
+
+2. **Wheel bore = vehicle hub** (73.1mm = 73.1mm)
+   → Perfect fit. No note needed.
+
+3. **Wheel bore < vehicle hub** (e.g., 73.1mm wheel on 74.1mm hub like E39)
+   → **INCOMPATIBLE.** Hub rings CANNOT work — you cannot put a ring inside a smaller hole.
+   → Give a SHORT response. Do NOT list community fitment setups or Kansei options.
+   → Say: "⚠️ Standard Kansei wheels (73.1mm bore) are NOT compatible with this vehicle's [X]mm hub. Hub rings will NOT work. Hub-specific SKUs or professional machining required. Contact Kansei directly about hub-specific options."
+
+CRITICAL: Never say "hub rings needed" when vehicle hub is LARGER than wheel bore. This is physically impossible and misleading.
+
+CRITICAL: When hub bore is incompatible (case 3), keep the response SHORT. Do not list setups, do not show Kansei wheel options. Just explain the incompatibility and suggest contacting Kansei for hub-specific SKUs."""
 
 
 def _has_fitment_style(query: str) -> bool:
@@ -313,6 +320,19 @@ def build_user_prompt(
         hub_ring_note = ""
 
     suspension_info = f"- User's Suspension: {suspension}\n" if suspension else ""
+
+    # For incompatible hub bore, don't show fitment data or Kansei options
+    # This forces a short response explaining the incompatibility
+    if hub_incompatible:
+        return f"""**USER QUERY:** {query}
+
+**VEHICLE:** {vehicle_info}{trim_info}
+- Bolt Pattern: {bolt_pattern}
+- Center Bore: {center_bore_str}mm
+- {hub_ring_note}
+
+**IMPORTANT:** Hub bore is incompatible. Do NOT list wheel setups or Kansei options.
+Give a SHORT response explaining the incompatibility and direct them to contact Kansei for hub-specific SKUs."""
 
     # Determine if we should ask for fitment style or give recommendations
     has_style = _has_fitment_style(query)

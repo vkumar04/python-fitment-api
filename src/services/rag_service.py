@@ -97,16 +97,35 @@ class RAGService:
 
         return False
 
+    @staticmethod
+    def _has_fitment_context(text: str) -> bool:
+        """Check if text contains fitment style or suspension keywords."""
+        text_lower = text.lower()
+        style_keywords = {
+            "flush", "aggressive", "track", "performance", "stance",
+            "tucked", "poke", "daily", "conservative", "safe", "meaty"
+        }
+        suspension_keywords = {
+            "stock", "lowered", "coilovers", "coils", "air", "bagged",
+            "springs", "slammed", "lifted", "oem", "factory"
+        }
+        words = set(text_lower.split())
+        return bool(words & (style_keywords | suspension_keywords))
+
     def _augment_query_with_history(
         self,
         query: str,
         history: list[dict[str, str]] | None,
     ) -> str:
-        """Prepend vehicle context from history if the current query lacks it.
+        """Prepend vehicle + fitment context from history if the current query lacks it.
 
-        Scans previous user messages for vehicle info (year, make, model, chassis).
-        If found and the current query doesn't already contain vehicle info,
-        prepends it so the DSPy pipeline can resolve the vehicle.
+        Scans previous user messages for:
+        1. Vehicle info (year, make, model, chassis)
+        2. Fitment style (flush, aggressive, track)
+        3. Suspension type (stock, lowered, coilovers, air)
+
+        Combines all relevant context so multi-turn conversations work properly.
+        Example: "e30 m3" → "aggressive" → "lowered" becomes "e30 m3 aggressive — lowered"
         """
         if not history:
             return query
@@ -115,11 +134,35 @@ class RAGService:
         if self._has_vehicle_info(query):
             return query
 
-        # Find the most recent user message that had vehicle info
+        # Collect context from history (vehicle + style + suspension)
+        vehicle_context = None
+        style_context = None
+
         for msg in reversed(history):
-            if msg["role"] == "user" and self._has_vehicle_info(msg["content"]):
-                vehicle_query = msg["content"].strip()
-                return f"{vehicle_query} — {query}"
+            if msg["role"] != "user":
+                continue
+
+            content = msg["content"].strip()
+
+            # Find vehicle info (only need the first one we find going backwards)
+            if vehicle_context is None and self._has_vehicle_info(content):
+                vehicle_context = content
+
+            # Find fitment style/suspension context (may be in a separate message)
+            if style_context is None and self._has_fitment_context(content):
+                # Only grab this if it's NOT the same as vehicle context
+                if content != vehicle_context:
+                    style_context = content
+
+            # Stop once we have both
+            if vehicle_context and style_context:
+                break
+
+        # Build augmented query
+        if vehicle_context:
+            if style_context:
+                return f"{vehicle_context} {style_context} — {query}"
+            return f"{vehicle_context} — {query}"
 
         return query
 
