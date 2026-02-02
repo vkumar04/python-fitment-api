@@ -1,93 +1,22 @@
 """Fitment analysis and classification utilities.
 
-This module provides geometry-based fitment calculations. The core math:
+This module provides row-based fitment analysis for CSV/database records.
+Core math is delegated to utils.tire_math for consistency.
 
-    poke_mm = (wheel_width - oem_width) * 25.4 / 2 + (oem_offset - wheel_offset)
-
-Where:
-- Positive poke = wheel sticks out past fender
-- Negative poke = wheel is tucked under fender
-- Zero = flush with fender line
-
-Thresholds (consistent across codebase):
-- Flush: poke < 10mm
-- Mild poke: 10mm <= poke < 20mm
-- Aggressive: poke >= 20mm
+See utils/tire_math.py for the industry-standard formulas:
+- Poke calculation: ((width_diff) × 25.4 / 2) + (oem_offset - wheel_offset)
+- Tire sizing: ISO 4000-1/4000-2 charts
+- Sidewall height: tire_width × (aspect_ratio / 100)
 """
 
 from typing import Any
 
 from ..utils.converters import safe_float
-
-
-# =============================================================================
-# CONSTANTS (single source of truth for thresholds)
-# =============================================================================
-
-# Poke thresholds in mm
-FLUSH_THRESHOLD = 10      # < 10mm = flush
-MILD_POKE_THRESHOLD = 20  # 10-20mm = mild poke, >= 20mm = aggressive
-
-# Default OEM specs when not provided (conservative assumptions)
-DEFAULT_OEM_WIDTH = 7.5   # inches
-DEFAULT_OEM_OFFSET = 35   # mm
-
-
-# =============================================================================
-# CORE GEOMETRY CALCULATIONS
-# =============================================================================
-
-def calculate_poke(
-    wheel_width: float,
-    wheel_offset: float,
-    oem_width: float = DEFAULT_OEM_WIDTH,
-    oem_offset: float = DEFAULT_OEM_OFFSET,
-) -> float:
-    """Calculate poke in mm using geometry.
-
-    The formula accounts for both width change AND offset change:
-    - Wider wheel pushes mounting face inward (more poke)
-    - Lower offset moves wheel outward (more poke)
-
-    Args:
-        wheel_width: Aftermarket wheel width in inches
-        wheel_offset: Aftermarket wheel offset in mm
-        oem_width: Factory wheel width in inches
-        oem_offset: Factory wheel offset in mm
-
-    Returns:
-        Poke in mm (positive = sticks out, negative = tucked)
-
-    Examples:
-        >>> calculate_poke(9.0, 35, 7.5, 35)  # Wider wheel, same offset
-        19.05  # ~19mm poke from width alone
-        >>> calculate_poke(7.5, 22, 7.5, 35)  # Same width, lower offset
-        13.0   # 13mm poke from offset alone
-    """
-    width_diff_inches = wheel_width - oem_width
-    width_diff_mm = width_diff_inches * 25.4
-    width_contribution = width_diff_mm / 2  # Half goes to each side
-
-    offset_contribution = oem_offset - wheel_offset  # Lower offset = more poke
-
-    return width_contribution + offset_contribution
-
-
-def classify_poke(poke_mm: float) -> str:
-    """Classify poke amount into style category.
-
-    Args:
-        poke_mm: Calculated poke in mm
-
-    Returns:
-        'flush', 'mild_poke', or 'aggressive'
-    """
-    if poke_mm < FLUSH_THRESHOLD:
-        return "flush"
-    elif poke_mm < MILD_POKE_THRESHOLD:
-        return "mild_poke"
-    else:
-        return "aggressive"
+from ..utils.tire_math import (
+    calculate_poke,
+    classify_poke,
+    POKE_FLUSH_MAX as FLUSH_THRESHOLD,
+)
 
 
 # =============================================================================
