@@ -97,72 +97,116 @@ class RAGService:
 
         return False
 
+    # Style keywords the user might say
+    STYLE_KEYWORDS = {"flush", "aggressive", "track", "performance", "stance", "tucked", "poke", "daily"}
+    # Suspension keywords the user might say
+    SUSPENSION_KEYWORDS = {"stock", "lowered", "coilovers", "coils", "air", "bagged", "springs", "slammed", "lifted"}
+
     @staticmethod
-    def _has_fitment_context(text: str) -> bool:
-        """Check if text contains fitment style or suspension keywords."""
+    def _extract_style(text: str) -> str | None:
+        """Extract fitment style from text if present."""
         text_lower = text.lower()
-        style_keywords = {
-            "flush", "aggressive", "track", "performance", "stance",
-            "tucked", "poke", "daily", "conservative", "safe", "meaty"
-        }
-        suspension_keywords = {
-            "stock", "lowered", "coilovers", "coils", "air", "bagged",
-            "springs", "slammed", "lifted", "oem", "factory"
-        }
-        words = set(text_lower.split())
-        return bool(words & (style_keywords | suspension_keywords))
+        for word in text_lower.split():
+            if word in RAGService.STYLE_KEYWORDS:
+                # Normalize to canonical style names
+                if word in ("flush", "daily"):
+                    return "flush"
+                if word in ("aggressive", "stance", "poke"):
+                    return "aggressive"
+                if word in ("track", "performance"):
+                    return "track"
+                if word == "tucked":
+                    return "tucked"
+        return None
+
+    @staticmethod
+    def _extract_suspension(text: str) -> str | None:
+        """Extract suspension type from text if present."""
+        text_lower = text.lower()
+        for word in text_lower.split():
+            if word in RAGService.SUSPENSION_KEYWORDS:
+                # Normalize to canonical suspension names
+                if word in ("stock",):
+                    return "stock"
+                if word in ("lowered", "springs"):
+                    return "lowered"
+                if word in ("coilovers", "coils", "slammed"):
+                    return "coilovers"
+                if word in ("air", "bagged"):
+                    return "air"
+                if word == "lifted":
+                    return "lifted"
+        return None
 
     def _augment_query_with_history(
         self,
         query: str,
         history: list[dict[str, str]] | None,
     ) -> str:
-        """Prepend vehicle + fitment context from history if the current query lacks it.
+        """Build a complete query from conversation history.
 
-        Scans previous user messages for:
-        1. Vehicle info (year, make, model, chassis)
-        2. Fitment style (flush, aggressive, track)
-        3. Suspension type (stock, lowered, coilovers, air)
+        Collects vehicle info, fitment style, and suspension from the conversation
+        so DSPy can parse everything in one shot.
 
-        Combines all relevant context so multi-turn conversations work properly.
-        Example: "e30 m3" → "aggressive" → "lowered" becomes "e30 m3 aggressive — lowered"
+        Example conversation:
+          User: "e36 m3"      -> asks style
+          User: "track"       -> asks suspension
+          User: "stock"       -> should give recommendations
+
+        This function combines them: "e36 m3 track stock"
         """
         if not history:
             return query
 
-        # If the query already has vehicle info, it's a fresh query
+        # If the query already has vehicle info, it's a fresh conversation
         if self._has_vehicle_info(query):
             return query
 
-        # Collect context from history (vehicle + style + suspension)
-        vehicle_context = None
-        style_context = None
+        # Collect all context from conversation history
+        vehicle = None
+        style = None
+        suspension = None
 
-        for msg in reversed(history):
+        # Go through history oldest to newest to build context
+        for msg in history:
             if msg["role"] != "user":
                 continue
 
             content = msg["content"].strip()
 
-            # Find vehicle info (only need the first one we find going backwards)
-            if vehicle_context is None and self._has_vehicle_info(content):
-                vehicle_context = content
+            # Check for vehicle info
+            if self._has_vehicle_info(content):
+                vehicle = content
 
-            # Find fitment style/suspension context (may be in a separate message)
-            if style_context is None and self._has_fitment_context(content):
-                # Only grab this if it's NOT the same as vehicle context
-                if content != vehicle_context:
-                    style_context = content
+            # Check for style (only if we don't have one yet)
+            if style is None:
+                found_style = self._extract_style(content)
+                if found_style:
+                    style = found_style
 
-            # Stop once we have both
-            if vehicle_context and style_context:
-                break
+            # Check for suspension (only if we don't have one yet)
+            if suspension is None:
+                found_susp = self._extract_suspension(content)
+                if found_susp:
+                    suspension = found_susp
 
-        # Build augmented query
-        if vehicle_context:
-            if style_context:
-                return f"{vehicle_context} {style_context} — {query}"
-            return f"{vehicle_context} — {query}"
+        # Also check the current query for style/suspension
+        if style is None:
+            style = self._extract_style(query)
+        if suspension is None:
+            suspension = self._extract_suspension(query)
+
+        # Build the combined query
+        if vehicle:
+            parts = [vehicle]
+            if style:
+                parts.append(style)
+            if suspension:
+                parts.append(suspension)
+            # Only add current query if it has new info (not just style/suspension we already captured)
+            if query not in (style, suspension) and query not in self.STYLE_KEYWORDS and query not in self.SUSPENSION_KEYWORDS:
+                parts.append(query)
+            return " ".join(parts)
 
         return query
 
