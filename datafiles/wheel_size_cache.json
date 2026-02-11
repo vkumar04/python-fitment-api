@@ -1,0 +1,126 @@
+{
+  "2017_toyota_86": {
+    "year": 2017,
+    "make": "Toyota",
+    "model": "86",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 45,
+    "oem_offset_max": 50,
+    "oem_wheel_sizes": [
+      "16x6.5",
+      "17x7",
+      "17x7.5",
+      "18x7",
+      "18x7.5"
+    ],
+    "oem_tire_sizes": [
+      "205/55R16",
+      "215/45ZR17",
+      "215/40ZR18",
+      "245/35ZR18",
+      "235/45ZR17"
+    ],
+    "stud_size": ""
+  },
+  "2020_jeep_wrangler": {
+    "year": 2020,
+    "make": "Jeep",
+    "model": "Wrangler",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 37,
+    "oem_offset_max": 44,
+    "oem_wheel_sizes": [],
+    "oem_tire_sizes": [
+      "245/75R17",
+      "255/75R17",
+      "285/70R17",
+      "255/70R18",
+      "275/55R20"
+    ],
+    "stud_size": ""
+  },
+  "2021_gmc_sierra_denali": null,
+  "2022_nissan_frontier": {
+    "year": 2022,
+    "make": "Nissan",
+    "model": "Frontier",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 28,
+    "oem_offset_max": 57,
+    "oem_wheel_sizes": [],
+    "oem_tire_sizes": [],
+    "stud_size": ""
+  },
+  "2022_toyota_tundra": {
+    "year": 2022,
+    "make": "Toyota",
+    "model": "Tundra",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 47,
+    "oem_offset_max": 60,
+    "oem_wheel_sizes": [
+      "18x7.5",
+      "18x8.5",
+      "20x8",
+      "20x8.5",
+      "22x8"
+    ],
+    "oem_tire_sizes": [
+      "245/75R18",
+      "265/70R18",
+      "285/65R18",
+      "265/60R20",
+      "265/50R22"
+    ],
+    "stud_size": ""
+  },
+  "2021_chevrolet_colorado_zr2": null,
+  "2020_ford_ranger": {
+    "year": 2020,
+    "make": "Ford",
+    "model": "Ranger",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 40,
+    "oem_offset_max": 57,
+    "oem_wheel_sizes": [
+      "16x7",
+      "17x7.5",
+      "17x8",
+      "18x8",
+      "20x8.5"
+    ],
+    "oem_tire_sizes": [
+      "255/70R16",
+      "255/65R17",
+      "265/65R17",
+      "265/70R17",
+      "265/60R18"
+    ],
+    "stud_size": ""
+  },
+  "2025_tesla_cybertruck": {
+    "year": 2025,
+    "make": "Tesla",
+    "model": "Cybertruck",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 55,
+    "oem_offset_max": 58,
+    "oem_wheel_sizes": [
+      "20x9",
+      "18x9",
+      "22x9"
+    ],
+    "oem_tire_sizes": [
+      "285/65R20",
+      "285/75R18",
+      "285/55R22"
+    ],
+    "stud_size": ""
+  }
+}

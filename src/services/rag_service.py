@@ -7,7 +7,6 @@ Flow:
 
 import asyncio
 import json
-import re
 import uuid
 from collections.abc import AsyncGenerator
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +18,13 @@ from ..core.config import get_settings
 from ..core.logging import log_error, log_external_call, logger
 from ..db import fitments as db
 from ..prompts.fitment_assistant import SYSTEM_PROMPT, build_user_prompt
+from ..utils.vehicle_parsing import (
+    extract_style,
+    extract_suspension,
+    has_vehicle_info,
+    STYLE_KEYWORDS,
+    SUSPENSION_KEYWORDS,
+)
 from .dspy_v2 import FitmentPipeline, create_pipeline
 from .retrieval_cache import RetrievalCache
 
@@ -51,75 +57,79 @@ class RAGService:
         return self._openai_client
 
     # -------------------------------------------------------------------------
-    # Conversation Context
+    # Conversation Context (uses centralized utils.vehicle_parsing)
     # -------------------------------------------------------------------------
-
-    @staticmethod
-    def _has_vehicle_info(text: str) -> bool:
-        """Check if text contains vehicle identifiers (year, make, or chassis code)."""
-        text_lower = text.lower()
-        words = set(text_lower.split())
-
-        # Year pattern (4-digit number between 1950-2030)
-        if re.search(r"\b(19[5-9]\d|20[0-3]\d)\b", text):
-            return True
-
-        # Known chassis codes
-        chassis_codes = {
-            # BMW
-            "e21", "e24", "e28", "e30", "e34", "e36", "e38", "e39",
-            "e46", "e53", "e60", "e82", "e90", "e92", "f10", "f30",
-            "f80", "f82", "g20", "g80", "g82",
-            # Honda
-            "fk2", "fk7", "fk8", "fl5", "dc2", "dc5",
-            # Nissan
-            "s13", "s14", "s15", "z32", "z33", "z34",
-            "r32", "r33", "r34", "r35",
-            # Subaru
-            "gc8", "va", "vb",
-            # Toyota
-            "ae86", "jza80", "a80", "a90",
-        }
-        if words & chassis_codes:
-            return True
-
-        # Common makes
-        makes = {
-            "acura", "audi", "bmw", "buick", "cadillac", "chevrolet", "chevy",
-            "chrysler", "dodge", "ford", "genesis", "gmc", "honda", "hyundai",
-            "infiniti", "jaguar", "jeep", "kia", "lexus", "lincoln", "mazda",
-            "mercedes", "mini", "mitsubishi", "nissan", "pontiac", "porsche",
-            "ram", "scion", "subaru", "tesla", "toyota", "volkswagen", "vw",
-            "volvo",
-        }
-        if words & makes:
-            return True
-
-        return False
 
     def _augment_query_with_history(
         self,
         query: str,
         history: list[dict[str, str]] | None,
     ) -> str:
-        """Prepend vehicle context from history if the current query lacks it.
+        """Build a complete query from conversation history.
 
-        Scans previous user messages for vehicle info (year, make, model, chassis).
-        If found and the current query doesn't already contain vehicle info,
-        prepends it so the DSPy pipeline can resolve the vehicle.
+        Collects vehicle info, fitment style, and suspension from the conversation
+        so DSPy can parse everything in one shot.
+
+        Example conversation:
+          User: "e36 m3"      -> asks style
+          User: "track"       -> asks suspension
+          User: "stock"       -> should give recommendations
+
+        This function combines them: "e36 m3 track stock"
         """
         if not history:
             return query
 
-        # If the query already has vehicle info, it's a fresh query
-        if self._has_vehicle_info(query):
+        # If the query already has vehicle info, it's a fresh conversation
+        if has_vehicle_info(query):
             return query
 
-        # Find the most recent user message that had vehicle info
-        for msg in reversed(history):
-            if msg["role"] == "user" and self._has_vehicle_info(msg["content"]):
-                vehicle_query = msg["content"].strip()
-                return f"{vehicle_query} — {query}"
+        # Collect all context from conversation history
+        vehicle = None
+        style = None
+        suspension = None
+
+        # Go through history oldest to newest to build context
+        for msg in history:
+            if msg["role"] != "user":
+                continue
+
+            content = msg["content"].strip()
+
+            # Check for vehicle info
+            if has_vehicle_info(content):
+                vehicle = content
+
+            # Check for style (only if we don't have one yet)
+            if style is None:
+                found_style = extract_style(content)
+                if found_style:
+                    style = found_style
+
+            # Check for suspension (only if we don't have one yet)
+            if suspension is None:
+                found_susp = extract_suspension(content)
+                if found_susp:
+                    suspension = found_susp
+
+        # Also check the current query for style/suspension
+        if style is None:
+            style = extract_style(query)
+        if suspension is None:
+            suspension = extract_suspension(query)
+
+        # Build the combined query
+        if vehicle:
+            parts = [vehicle]
+            if style:
+                parts.append(style)
+            if suspension:
+                parts.append(suspension)
+            # Only add current query if it has new info (not just style/suspension we already captured)
+            query_lower = query.lower().strip()
+            if query_lower not in (style, suspension) and query_lower not in STYLE_KEYWORDS and query_lower not in SUSPENSION_KEYWORDS:
+                parts.append(query)
+            return " ".join(parts)
 
         return query
 
@@ -294,7 +304,7 @@ class RAGService:
             # Phase 2: Stream response via OpenAI
             specs = retrieval.specs or {}
             user_content = build_user_prompt(
-                query=query,
+                query=augmented_query,  # Use augmented query so style/suspension from history is detected
                 vehicle_info=retrieval.vehicle_summary,
                 bolt_pattern=specs.get("bolt_pattern", "Unknown"),
                 center_bore=float(specs.get("center_bore") or 0),
@@ -305,6 +315,7 @@ class RAGService:
                 kansei_recommendations=retrieval.kansei_str,
                 trim=retrieval.parsed.get("trim"),
                 suspension=retrieval.parsed.get("suspension"),
+                recommended_setups=retrieval.recommended_setups_str,
             )
 
             messages: list[dict[str, str]] = [

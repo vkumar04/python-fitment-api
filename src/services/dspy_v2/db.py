@@ -8,26 +8,8 @@ All functions are **synchronous** because the pipeline runs inside
 from typing import Any
 
 from ...db.client import get_supabase_client as _get_client
-
-
-def _safe_float(val: Any, default: float = 0.0) -> float:
-    """Safely convert value to float."""
-    if val is None:
-        return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
-
-
-def _safe_int(val: Any, default: int = 0) -> int:
-    """Safely convert value to int."""
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
+from ...utils.converters import safe_float as _safe_float, safe_int as _safe_int
+from ...utils.tire_math import recommend_tire_size, calculate_sidewall_height
 
 
 # -----------------------------------------------------------------------------
@@ -360,44 +342,333 @@ def format_fitments_for_prompt(fitments: list[dict[str, Any]]) -> str:
 
 
 def format_kansei_for_prompt(wheels: list[dict[str, Any]]) -> str:
-    """Format Kansei wheels as a string for the LLM prompt."""
+    """Format Kansei wheels as a string for the LLM prompt.
+
+    Includes math-based fitment calculations (poke, style, mods needed).
+    """
     if not wheels:
         return "(No Kansei wheels available for this bolt pattern)"
 
-    # Group by model
-    by_model: dict[str, list[dict[str, Any]]] = {}
-    for w in wheels:
-        model = w.get("model", "Unknown")
-        if model not in by_model:
-            by_model[model] = []
-        by_model[model].append(w)
+    # Calculate max width available
+    all_widths = [w.get("width", 0) for w in wheels]
+    max_width = max(all_widths) if all_widths else 0
 
-    lines = []
-    for model, model_wheels in list(by_model.items())[:6]:
-        # Get unique sizes
-        sizes = []
+    # Group by fitment category for clearer recommendations
+    daily_safe = []
+    needs_mods = []
+    aggressive = []
+
+    for w in wheels:
+        fitment_calc = w.get("fitment_calc", {})
+        poke = fitment_calc.get("poke_mm", 0)
+        mods = fitment_calc.get("mods_needed", [])
+
+        # Categorize by poke level (consistent with style thresholds)
+        # - flush/daily-safe: poke < 10mm AND no mods needed
+        # - mild poke: 10mm <= poke < 20mm (may need minor work)
+        # - aggressive: poke >= 20mm OR significant mods needed
+        if poke >= 20:
+            aggressive.append(w)
+        elif poke >= 10 or mods:
+            needs_mods.append(w)  # 10-20mm poke OR has mods = needs work
+        else:
+            daily_safe.append(w)  # < 10mm poke and no mods = daily-safe
+
+    # Get all unique sizes WITH offsets and poke values
+    lines = [
+        "## KANSEI WHEELS AVAILABLE (with calculated fitment)",
+        f"Max width: {max_width}\"",
+        "",
+    ]
+
+    # Format by category
+    def format_wheel_list(wheel_list: list[dict[str, Any]], category: str) -> list[str]:
+        result = [f"**{category}:**"]
         seen = set()
-        for w in sorted(
-            model_wheels, key=lambda x: (x.get("diameter", 0), x.get("width", 0))
-        ):
+        for w in sorted(wheel_list, key=lambda x: (x.get("diameter", 0), x.get("width", 0))):
             size_key = f"{w.get('diameter')}-{w.get('width')}-{w.get('offset')}"
             if size_key in seen:
                 continue
             seen.add(size_key)
 
-            size_str = f"{int(w['diameter'])}x{w['width']} +{w['offset']}"
+            d = int(w.get("diameter", 0))
+            width = w.get("width", 0)
+            offset = w.get("offset", 0)
+            fitment_calc = w.get("fitment_calc", {})
+            poke = fitment_calc.get("poke_mm", 0)
+            style = fitment_calc.get("style", "unknown")
+            mods = fitment_calc.get("mods_needed", [])
+
+            # Build size string with math data
+            size_str = f"{d}x{width} +{offset}"
+            math_info = f"({poke:+.0f}mm poke, {style})"
+            mod_info = f" — {', '.join(mods)}" if mods else ""
+
             url = w.get("url", "")
             if url:
-                sizes.append(f"[{size_str}]({url})")
+                result.append(f"- [{size_str}]({url}) {math_info}{mod_info}")
             else:
-                sizes.append(size_str)
+                result.append(f"- {size_str} {math_info}{mod_info}")
 
-            if len(sizes) >= 4:
-                break
+        return result if len(result) > 1 else []
 
-        prices = [w.get("price", 0) for w in model_wheels if w.get("price")]
-        min_price = min(prices) if prices else 0
+    if daily_safe:
+        lines.extend(format_wheel_list(daily_safe, "Daily-safe (no mods needed)"))
+        lines.append("")
 
-        lines.append(f"- **{model}**: {', '.join(sizes)} (from ${min_price:.0f}/wheel)")
+    if needs_mods:
+        lines.extend(format_wheel_list(needs_mods, "Needs minor mods (fender roll/camber)"))
+        lines.append("")
+
+    if aggressive:
+        lines.extend(format_wheel_list(aggressive, "Aggressive/Show (significant mods)"))
+        lines.append("")
+
+    # Add available sizes summary for validation
+    unique_sizes = set()
+    for w in wheels:
+        d = int(w.get("diameter", 0))
+        width = w.get("width", 0)
+        offset = w.get("offset", 0)
+        unique_sizes.add(f"{d}x{width}+{offset}")
+
+    lines.append("**Available sizes:** " + ", ".join(sorted(unique_sizes)))
+    lines.append("")
+    lines.append("CRITICAL: Only recommend sizes from this list. Use the poke values to match user's desired fitment style.")
 
     return "\n".join(lines)
+
+
+def generate_recommended_setups(
+    wheels: list[dict[str, Any]],
+    fitment_style: str | None = None,
+    suspension: str | None = None,
+) -> str:
+    """Generate pre-computed setup recommendations using math.
+
+    This produces concrete recommendations that OpenAI should present verbatim,
+    rather than letting OpenAI invent specs.
+
+    The tire sizing now accounts for BOTH style AND suspension:
+    - Flush + Stock = standard sizing
+    - Aggressive + Bagged = narrow tires to clear when aired out
+    - Track + Coilovers = narrow tires for compression clearance
+
+    Args:
+        wheels: List of validated Kansei wheels with fitment_calc data
+        fitment_style: User's desired style (flush/aggressive/track)
+        suspension: User's suspension type (stock/lowered/coilovers/air)
+
+    Returns:
+        Formatted string with 1-2 recommended setups
+    """
+    if not wheels:
+        return "(No Kansei wheels fit this vehicle)"
+
+    susp = (suspension or "stock").lower()
+
+    # Categorize by fitment style using consistent thresholds:
+    # - flush: poke < 10mm (matches calculate_wheel_fitment thresholds)
+    # - mild poke: 10mm <= poke < 20mm
+    # - aggressive: poke >= 20mm
+    flush_wheels = []       # poke < 10mm
+    mild_poke_wheels = []   # 10mm <= poke < 20mm
+    aggressive_wheels = []  # poke >= 20mm
+
+    for w in wheels:
+        calc = w.get("fitment_calc", {})
+        poke = calc.get("poke_mm", 0)
+
+        if poke < 10:
+            flush_wheels.append(w)
+        elif poke < 20:
+            mild_poke_wheels.append(w)
+        else:
+            aggressive_wheels.append(w)
+
+    # Select wheels based on style preference with STRICT filtering
+    target_wheels = []
+
+    if fitment_style:
+        style_lower = fitment_style.lower()
+        if style_lower in ("flush", "daily", "conservative", "safe"):
+            target_wheels = flush_wheels
+            # Only fall back to mild poke if user is okay with it
+            if not target_wheels:
+                # No flush wheels available - don't silently recommend aggressive
+                return _no_matching_style_message("flush", mild_poke_wheels, aggressive_wheels)
+        elif style_lower in ("aggressive", "poke", "stance", "show"):
+            target_wheels = aggressive_wheels or mild_poke_wheels
+        elif style_lower in ("track", "performance"):
+            # Track/performance: prefer flush/mild for grip, not extreme poke
+            target_wheels = flush_wheels or mild_poke_wheels
+        else:
+            target_wheels = flush_wheels or mild_poke_wheels or aggressive_wheels
+    else:
+        # No style specified - default to daily-safe
+        target_wheels = flush_wheels or mild_poke_wheels or aggressive_wheels
+
+    if not target_wheels:
+        target_wheels = wheels
+
+    # Get best square setup (same front/rear)
+    square_setup = None
+    for w in sorted(target_wheels, key=lambda x: abs(x.get("fitment_calc", {}).get("poke_mm", 0))):
+        d = int(w.get("diameter", 0))
+        width = w.get("width", 0)
+        offset = w.get("offset", 0)
+        calc = w.get("fitment_calc", {})
+        poke = calc.get("poke_mm", 0)
+        style = calc.get("style", "unknown")
+        mods = calc.get("mods_needed", [])
+        url = w.get("url", "")
+
+        # Calculate correct tire size based on BOTH style AND suspension
+        tire_calc = _get_tire_for_suspension(
+            wheel_width=width,
+            wheel_diameter=d,
+            suspension=susp,
+            fitment_style=fitment_style,
+        )
+
+        square_setup = {
+            "type": "Square",
+            "front": f"{d}x{width} +{offset}",
+            "rear": f"{d}x{width} +{offset}",
+            "tire": tire_calc["tire"],
+            "tire_alt": tire_calc["tire_alt"],
+            "tire_notes": tire_calc["notes"],
+            "sidewall_mm": tire_calc["sidewall_mm"],
+            "poke": poke,
+            "style": style,
+            "mods": mods,
+            "url": url,
+            "model": w.get("model", ""),
+            "suspension": susp,
+        }
+        break
+
+    # Build output
+    lines = ["## PRE-COMPUTED RECOMMENDATIONS (use these exact specs)", ""]
+
+    if square_setup:
+        susp_label = square_setup['suspension'].title()
+        lines.append(f"**Recommended Setup ({square_setup['style']}, {susp_label} suspension)**")
+        lines.append(f"Front: {square_setup['front']} | Rear: {square_setup['rear']}")
+        lines.append(f"Tire: {square_setup['tire']} (recommended for {susp_label})")
+        lines.append(f"  → Sidewall: {square_setup['sidewall_mm']}mm | {square_setup['tire_notes']}")
+        if square_setup['tire_alt']:
+            lines.append(f"Alternative: {square_setup['tire_alt']} (only if you need more clearance)")
+        lines.append(f"Calculated poke: {square_setup['poke']:+.0f}mm ({square_setup['style']})")
+
+        # Mods logic depends on suspension + tire combo
+        if square_setup['mods']:
+            lines.append(f"Mods needed: {', '.join(square_setup['mods'])}")
+        elif square_setup['suspension'] in ("air", "bagged", "bags"):
+            lines.append("Mods needed: None with recommended tire (WILL rub with wider tires)")
+        elif square_setup['suspension'] in ("coilovers", "coils", "slammed"):
+            lines.append("Mods needed: None with recommended tire (may rub with wider/taller tires)")
+        else:
+            lines.append("Mods needed: None (daily-safe)")
+        if square_setup['url']:
+            lines.append(f"Kansei: [{square_setup['model']}]({square_setup['url']})")
+        lines.append("")
+
+    lines.append("IMPORTANT: Present these EXACT specs to the user. Do not invent different sizes.")
+
+    return "\n".join(lines)
+
+
+def _no_matching_style_message(
+    requested_style: str,
+    mild_poke_wheels: list[dict[str, Any]],
+    aggressive_wheels: list[dict[str, Any]],
+) -> str:
+    """Generate a message when no wheels match the requested fitment style.
+
+    This prevents the system from silently recommending aggressive wheels
+    when the user asked for flush.
+    """
+    lines = ["## PRE-COMPUTED RECOMMENDATIONS", ""]
+
+    if requested_style == "flush":
+        lines.append("**No true flush options available** for this vehicle with Kansei wheels.")
+        lines.append("")
+        if mild_poke_wheels:
+            # Show what IS available as an alternative
+            w = mild_poke_wheels[0]
+            calc = w.get("fitment_calc", {})
+            poke = calc.get("poke_mm", 0)
+            d = int(w.get("diameter", 0))
+            width = w.get("width", 0)
+            offset = w.get("offset", 0)
+            lines.append(f"Closest option: {d}x{width} +{offset} ({poke:+.0f}mm poke - mild poke, not flush)")
+            lines.append("")
+            lines.append("This setup will have noticeable poke beyond the fender line.")
+            lines.append("If you need true flush fitment, you may need to consider spacers or a different wheel brand.")
+        elif aggressive_wheels:
+            w = aggressive_wheels[0]
+            calc = w.get("fitment_calc", {})
+            poke = calc.get("poke_mm", 0)
+            lines.append(f"Available Kansei wheels have {poke:+.0f}mm+ poke (aggressive), which is not suitable for a flush look.")
+        else:
+            lines.append("No Kansei wheels are available for this bolt pattern.")
+
+    lines.append("")
+    lines.append("IMPORTANT: Be honest with the user that flush fitment is not achievable with available wheels.")
+
+    return "\n".join(lines)
+
+
+def _get_tire_for_suspension(
+    wheel_width: float,
+    wheel_diameter: int,
+    suspension: str | None,
+    fitment_style: str | None,
+) -> dict[str, Any]:
+    """Calculate tire size based on wheel specs AND suspension type.
+
+    Uses centralized tire_math module which implements industry-standard formulas:
+    - Sidewall height = tire_width × (aspect_ratio / 100)
+    - Tire width range from ISO/industry charts
+    - Suspension-based width adjustments
+
+    Args:
+        wheel_width: Wheel width in inches
+        wheel_diameter: Wheel diameter in inches
+        suspension: Suspension type (stock/lowered/coilovers/air)
+        fitment_style: Fitment style (currently unused, reserved for future)
+
+    Returns:
+        Dict with tire recommendation including size, sidewall, and notes
+    """
+    # fitment_style reserved for future style-specific tire recommendations
+    _ = fitment_style
+
+    # Normalize suspension type
+    susp = (suspension or "stock").lower()
+    if susp in ("coils", "slammed"):
+        susp = "coilovers"
+    elif susp in ("bags", "bagged"):
+        susp = "air"
+    elif susp in ("springs", "dropped"):
+        susp = "lowered"
+    elif susp in ("oem", "factory"):
+        susp = "stock"
+
+    # Use centralized tire math
+    rec = recommend_tire_size(wheel_width, wheel_diameter, susp)
+
+    return {
+        "tire": rec["tire"],
+        "tire_alt": rec["tire_alt"],
+        "tire_width": rec["tire_width"],
+        "tire_aspect": rec["aspect_ratio"],
+        "sidewall_mm": rec["sidewall_mm"],
+        "alt_sidewall_mm": calculate_sidewall_height(
+            rec["tire_width"] + 10, rec["aspect_ratio"]
+        ) if rec["tire_alt"] else rec["sidewall_mm"],
+        "notes": rec["notes"],
+        "is_safe": True,
+        "suspension": susp,
+    }
