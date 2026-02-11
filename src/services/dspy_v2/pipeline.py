@@ -12,6 +12,7 @@ streams the final response separately (e.g. via OpenAI streaming).
 """
 
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -26,7 +27,9 @@ from .signatures import (
     ValidateFitmentMatch,
     ValidateVehicleSpecs,
 )
-from .tools import search_vehicle_specs_web, validate_bolt_pattern
+from .tools import scrape_vehicle_specs, validate_bolt_pattern, validate_center_bore
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -599,7 +602,7 @@ class FitmentPipeline(dspy.Module):
         # Only use LLM validation for unverified/low-confidence specs.
         is_trusted = (
             specs.get("verified") is True
-            or specs.get("source") in ("manual", "knowledge_base")
+            or specs.get("source") in ("manual", "dspy_llm_validated")
             or float(specs.get("confidence", 0)) >= 0.85
         )
 
@@ -614,59 +617,19 @@ class FitmentPipeline(dspy.Module):
             validation_result = self._validate_vehicle_specs(parsed_info, specs)
 
             if not validation_result["is_valid"]:
-                # DB returned wrong specs — try knowledge base / web scrape
-                if parsed_info.get("make"):
-                    web_result = search_vehicle_specs_web(
-                        year=parsed_info.get("year"),
-                        make=parsed_info["make"],
-                        model=parsed_info.get("model") or "",
-                        chassis_code=parsed_info.get("chassis_code"),
-                    )
-                    if web_result.get("found"):
-                        alt_specs = {
-                            "bolt_pattern": web_result["bolt_pattern"],
-                            "center_bore": web_result["center_bore"],
-                            "stud_size": web_result.get("stud_size"),
-                            "min_diameter": web_result.get("min_diameter", 15),
-                            "max_diameter": web_result.get("max_diameter", 20),
-                            "min_width": web_result.get("min_width", 6.0),
-                            "max_width": web_result.get("max_width", 10.0),
-                            "min_offset": web_result.get("min_offset", -10),
-                            "max_offset": web_result.get("max_offset", 50),
-                            "source": web_result.get("source", "knowledge_base"),
-                            "confidence": web_result.get("confidence", 0.7),
-                        }
-                        # Knowledge base results are trusted — skip LLM validation
-                        if alt_specs.get("source") == "knowledge_base":
-                            specs = alt_specs
-                            validation_result = {
-                                "is_valid": True,
-                                "validation_errors": [],
-                                "corrected_specs": None,
-                                "suggestions": None,
-                            }
-                        else:
-                            alt_validation = self._validate_vehicle_specs(
-                                parsed_info, alt_specs
-                            )
-                            if alt_validation["is_valid"]:
-                                specs = alt_specs
-                                validation_result = alt_validation
+                suggestion = validation_result.get("suggestions", "")
+                errors = validation_result.get("validation_errors", [])
+                error_msg = errors[0] if errors else "Invalid vehicle combination"
+                msg = f"**Vehicle Not Found**\n\n{error_msg}"
+                if suggestion:
+                    msg += f"\n\n{suggestion}"
 
-                if not validation_result["is_valid"]:
-                    suggestion = validation_result.get("suggestions", "")
-                    errors = validation_result.get("validation_errors", [])
-                    error_msg = errors[0] if errors else "Invalid vehicle combination"
-                    msg = f"**Vehicle Not Found**\n\n{error_msg}"
-                    if suggestion:
-                        msg += f"\n\n{suggestion}"
-
-                    return RetrievalResult(
-                        parsed=parsed_info,
-                        specs=specs,
-                        early_response=msg,
-                        validation=validation_result,
-                    )
+                return RetrievalResult(
+                    parsed=parsed_info,
+                    specs=specs,
+                    early_response=msg,
+                    validation=validation_result,
+                )
 
         # Step 4: Get community fitments + Kansei wheels
         # For classic cars (max_diameter <= 17), filter out extreme setups
@@ -834,45 +797,17 @@ class FitmentPipeline(dspy.Module):
         }
 
     def _resolve_specs(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
-        """Resolve vehicle specs from knowledge base, then DB, then web scrape.
+        """Resolve vehicle specs from DB, then LLM, then web scrape cross-validation.
 
         Priority order:
-        1. Knowledge base (hardcoded, verified specs for known vehicles)
-        2. Database (cached specs from previous lookups)
-        3. Web scrape (wheel-size.com for unknown vehicles)
-
-        This ensures known vehicles like E30 M3 always get correct specs
-        even if DB has stale/incorrect data.
+        1. Database (verified seeds + previously cached LLM/scrape results)
+        2. DSPy LLM (SearchVehicleSpecs signature)
+        3. Web scrape cross-validation (wheel-size.com, if year available)
+        4. Cache result to DB for future lookups
         """
         model = parsed.get("model") or ""
 
-        # Try knowledge base FIRST (most reliable for known vehicles)
-        if parsed.get("make"):
-            kb_result = search_vehicle_specs_web(
-                year=parsed.get("year"),
-                make=parsed["make"],
-                model=model,
-                chassis_code=parsed.get("chassis_code"),
-            )
-            # Knowledge base results are high confidence and should be trusted
-            if kb_result.get("found") and kb_result.get("source") == "knowledge_base":
-                return {
-                    "bolt_pattern": kb_result["bolt_pattern"],
-                    "center_bore": kb_result["center_bore"],
-                    "stud_size": kb_result.get("stud_size"),
-                    "year_start": kb_result.get("year_start"),
-                    "year_end": kb_result.get("year_end"),
-                    "min_diameter": kb_result.get("min_diameter", 15),
-                    "max_diameter": kb_result.get("max_diameter", 20),
-                    "min_width": kb_result.get("min_width", 6.0),
-                    "max_width": kb_result.get("max_width", 10.0),
-                    "min_offset": kb_result.get("min_offset", -10),
-                    "max_offset": kb_result.get("max_offset", 50),
-                    "source": "knowledge_base",
-                    "confidence": kb_result.get("confidence", 0.85),
-                }
-
-        # Try DB second (cached specs)
+        # Step 1: Try DB first (verified seeds + cached results)
         db_specs = None
         try:
             db_specs = db.find_vehicle_specs(
@@ -887,62 +822,157 @@ class FitmentPipeline(dspy.Module):
         if db_specs and db_specs.get("bolt_pattern"):
             return db_specs
 
-        # Not in knowledge base or DB - try web scrape
-        if parsed.get("make"):
-            web_result = search_vehicle_specs_web(
-                year=parsed.get("year"),
+        # Step 2: DSPy LLM resolution
+        llm_specs = self._resolve_via_llm(parsed)
+
+        # Step 3: Web scrape cross-validation (requires year)
+        scrape_specs = None
+        year = parsed.get("year")
+        if year and parsed.get("make"):
+            scrape_specs = scrape_vehicle_specs(
+                year=year,
                 make=parsed["make"],
                 model=model,
-                chassis_code=parsed.get("chassis_code"),
             )
 
-            if web_result.get("found"):
-                # Validate the web result
-                if not validate_bolt_pattern(web_result.get("bolt_pattern", "")):
-                    return None
+        # Step 4: Merge results
+        if llm_specs and scrape_specs:
+            final_specs = self._cross_validate(llm_specs, scrape_specs)
+        elif llm_specs:
+            # LLM only — lower confidence, no cross-validation
+            final_specs = {**llm_specs, "confidence": 0.60}
+        elif scrape_specs:
+            # Scrape only — LLM failed
+            final_specs = {
+                "bolt_pattern": scrape_specs["bolt_pattern"],
+                "center_bore": scrape_specs["center_bore"],
+                "stud_size": scrape_specs.get("stud_size", ""),
+                "min_diameter": scrape_specs.get("min_diameter", 15),
+                "max_diameter": scrape_specs.get("max_diameter", 20),
+                "min_width": scrape_specs.get("min_width", 6.0),
+                "max_width": scrape_specs.get("max_width", 10.0),
+                "min_offset": scrape_specs.get("min_offset", -10),
+                "max_offset": scrape_specs.get("max_offset", 50),
+                "source": "wheel_size_scrape",
+                "confidence": 0.70,
+            }
+        else:
+            return None
 
-                # Save to DB for future lookups
-                year_start = parsed.get("year")
-                year_end = parsed.get("year")
+        # Step 5: Cache to DB for future lookups
+        try:
+            db.save_vehicle_specs(
+                year_start=year,
+                year_end=year,
+                make=parsed.get("make") or "Unknown",
+                model=model or "Unknown",
+                chassis_code=parsed.get("chassis_code"),
+                bolt_pattern=final_specs["bolt_pattern"],
+                center_bore=final_specs["center_bore"],
+                stud_size=final_specs.get("stud_size"),
+                min_diameter=final_specs.get("min_diameter", 15),
+                max_diameter=final_specs.get("max_diameter", 20),
+                min_width=final_specs.get("min_width", 6.0),
+                max_width=final_specs.get("max_width", 10.0),
+                min_offset=final_specs.get("min_offset", -10),
+                max_offset=final_specs.get("max_offset", 50),
+                source=final_specs.get("source", "dspy_llm"),
+                source_url=final_specs.get("source_url"),
+                confidence=final_specs.get("confidence", 0.6),
+            )
+        except Exception:
+            pass  # Don't block retrieval if DB save fails
 
-                try:
-                    db.save_vehicle_specs(
-                        year_start=year_start,
-                        year_end=year_end,
-                        make=parsed["make"],
-                        model=model or "Unknown",
-                        chassis_code=parsed.get("chassis_code"),
-                        bolt_pattern=web_result["bolt_pattern"],
-                        center_bore=web_result["center_bore"],
-                        stud_size=web_result.get("stud_size"),
-                        min_diameter=web_result.get("min_diameter", 15),
-                        max_diameter=web_result.get("max_diameter", 20),
-                        min_width=web_result.get("min_width", 6.0),
-                        max_width=web_result.get("max_width", 10.0),
-                        min_offset=web_result.get("min_offset", -10),
-                        max_offset=web_result.get("max_offset", 50),
-                        source=web_result.get("source", "web_search"),
-                        source_url=web_result.get("source_url"),
-                        confidence=web_result.get("confidence", 0.8),
-                    )
-                except Exception:
-                    pass  # Don't block retrieval if DB save fails
+        return final_specs
 
-                return {
-                    "bolt_pattern": web_result["bolt_pattern"],
-                    "center_bore": web_result["center_bore"],
-                    "stud_size": web_result.get("stud_size"),
-                    "min_diameter": web_result.get("min_diameter", 15),
-                    "max_diameter": web_result.get("max_diameter", 20),
-                    "min_width": web_result.get("min_width", 6.0),
-                    "max_width": web_result.get("max_width", 10.0),
-                    "min_offset": web_result.get("min_offset", -10),
-                    "max_offset": web_result.get("max_offset", 50),
-                    "source": web_result.get("source", "web_search"),
-                    "confidence": web_result.get("confidence", 0.8),
-                }
+    def _resolve_via_llm(self, parsed: dict[str, Any]) -> dict[str, Any] | None:
+        """Resolve vehicle specs using DSPy SearchVehicleSpecs signature."""
+        if not parsed.get("make"):
+            return None
 
-        return None
+        try:
+            result = self.search_specs(
+                year=parsed.get("year"),
+                make=parsed["make"],
+                model=parsed.get("model") or "",
+                chassis_code=parsed.get("chassis_code"),
+                trim=parsed.get("trim"),
+            )
+
+            bolt_pattern = str(result.bolt_pattern).strip()
+            if not validate_bolt_pattern(bolt_pattern):
+                logger.warning("LLM returned invalid bolt pattern: %s", bolt_pattern)
+                return None
+
+            center_bore = float(result.center_bore)
+            if not validate_center_bore(center_bore):
+                logger.warning("LLM returned invalid center bore: %s", center_bore)
+                return None
+
+            confidence = min(float(result.confidence), 0.65)
+
+            return {
+                "bolt_pattern": bolt_pattern,
+                "center_bore": center_bore,
+                "stud_size": str(result.stud_size).strip(),
+                "oem_diameter": int(result.oem_diameter),
+                "min_diameter": int(result.min_diameter),
+                "max_diameter": int(result.max_diameter),
+                "oem_width": float(result.oem_width),
+                "min_width": float(result.min_width),
+                "max_width": float(result.max_width),
+                "oem_offset": int(result.oem_offset),
+                "min_offset": int(result.min_offset),
+                "max_offset": int(result.max_offset),
+                "source": "dspy_llm",
+                "source_url": str(result.source_url).strip(),
+                "confidence": confidence,
+            }
+        except Exception as e:
+            logger.warning("DSPy SearchVehicleSpecs failed: %s", e)
+            return None
+
+    @staticmethod
+    def _cross_validate(
+        llm_specs: dict[str, Any],
+        scrape_specs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Cross-validate LLM specs against web scrape results.
+
+        If bolt patterns agree, trust the LLM ranges (more trim-aware) at
+        higher confidence. If they disagree, prefer the scrape for bolt
+        pattern (data-driven) at lower confidence.
+        """
+        llm_bp = llm_specs["bolt_pattern"]
+        scrape_bp = scrape_specs["bolt_pattern"]
+
+        if llm_bp == scrape_bp:
+            # Agreement — use LLM ranges (more nuanced for trims) with boosted confidence
+            return {
+                **llm_specs,
+                "confidence": 0.80,
+                "source": "dspy_llm_validated",
+            }
+        else:
+            # Disagreement — prefer scrape bolt pattern (data-driven)
+            logger.warning(
+                "Bolt pattern mismatch: LLM=%s, scrape=%s — using scrape",
+                llm_bp,
+                scrape_bp,
+            )
+            return {
+                "bolt_pattern": scrape_bp,
+                "center_bore": scrape_specs["center_bore"],
+                "stud_size": scrape_specs.get("stud_size", llm_specs.get("stud_size", "")),
+                "min_diameter": scrape_specs.get("min_diameter", 15),
+                "max_diameter": scrape_specs.get("max_diameter", 20),
+                "min_width": scrape_specs.get("min_width", 6.0),
+                "max_width": scrape_specs.get("max_width", 10.0),
+                "min_offset": scrape_specs.get("min_offset", -10),
+                "max_offset": scrape_specs.get("max_offset", 50),
+                "source": "wheel_size_scrape",
+                "confidence": 0.70,
+            }
 
     def _validate_vehicle_specs(
         self,

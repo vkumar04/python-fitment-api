@@ -226,36 +226,48 @@ class GenerateFitmentResponse(dspy.Signature):
 
 
 class SearchVehicleSpecs(dspy.Signature):
-    """Search the web for vehicle wheel specifications.
+    """Resolve vehicle wheel specifications from your knowledge.
 
-    Used when specs aren't in our database. Search for:
-    - Bolt pattern (e.g., "5x120")
-    - Center bore (e.g., "72.6mm")
-    - OEM wheel sizes
-    - Offset ranges
+    CRITICAL SAFETY: Bolt pattern and center bore are PHYSICAL CONSTRAINTS.
+    A wrong bolt pattern means the wheel CANNOT physically mount on the hub.
+    A wrong center bore causes vibration and potential wheel failure.
 
-    SEARCH STRATEGY:
-    1. Search "[year] [make] [model] bolt pattern wheel specs"
-    2. Look for reliable sources (manufacturer, wheel sites, forums)
-    3. Cross-reference multiple sources if possible
+    BOLT PATTERN RULES (common mistakes to avoid):
+    - BMW E30 base models (318i, 325i): 4x100, center bore 57.1mm
+    - BMW E30 M3: 5x120, center bore 72.6mm (DIFFERENT from base E30!)
+    - BMW E36/E46/E90/F-series: 5x120, center bore 72.6mm
+    - BMW G-series (G20, G80, G82, 2019+): 5x112, center bore 66.5mm (NOT 5x120!)
+    - Honda Civic pre-2006: 4x100; 2006+: 5x114.3
+    - Honda Civic Type R FK8/FL5: 5x120 (NOT 5x114.3 like regular Civic!)
+    - Subaru WRX pre-2015: 5x100; 2015+ VA chassis: 5x114.3
+    - Subaru WRX STI pre-2015: 5x114.3; same as 2015+ WRX
+    - Toyota 86 / Scion FR-S / Subaru BRZ (ZN6): 5x100
+    - Toyota GR86 (ZN8, 2022+): 5x114.3 (changed from 5x100!)
+    - Toyota GR Supra A90: 5x112 (BMW platform)
+    - Nissan 240SX S13: 4x114.3; S14: 5x114.3
+    - Porsche: 5x130
 
-    TRUSTED SOURCES:
-    - Manufacturer specs
-    - wheel-size.com
-    - fitmentindustries.com
-    - willtheyfit.com
-    - Model-specific forums (e.g., bimmerforums, civicx)
+    TRIM MATTERS: Performance trims often have different specs than base models.
+    The M3 has different specs from the 325i on the same chassis. The STI has
+    different specs from the base WRX on certain generations. Always consider
+    the specific trim when resolving specs.
 
-    VALIDATION:
-    - Bolt patterns should be standard formats (4x100, 5x114.3, 5x120, 5x112)
-    - Center bore is typically 54-73mm for most cars
-    - Offsets typically range from -10 to +60 for street cars
+    OFFSET RANGES: Provide safe aftermarket ranges, not just OEM.
+    - min_offset: the most aggressive (lowest) offset that fits without
+      fender work on stock suspension
+    - max_offset: the most conservative (highest) offset before the wheel
+      sits too far inboard
+
+    If you are NOT confident about the bolt pattern, set confidence below 0.5.
     """
 
     year: int | None = dspy.InputField()
     make: str = dspy.InputField()
     model: str = dspy.InputField()
     chassis_code: str | None = dspy.InputField()
+    trim: str | None = dspy.InputField(
+        desc="Trim level if known (M3, STI, Type R, GT, Sport). Affects specs."
+    )
 
     # What we found
     bolt_pattern: str = dspy.OutputField(desc="e.g., '5x120'")

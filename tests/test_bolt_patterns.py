@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Test 50 vehicles with validated bolt patterns.
 
-Uses the knowledge base lookup from the DSPy v2 pipeline tools
-to verify bolt patterns for known vehicles.
+Uses the DSPy pipeline's spec resolution to verify bolt patterns
+for known vehicles. These should all resolve from the DB seed data.
 """
 
-from src.services.dspy_v2.tools import search_vehicle_specs_web
+import os
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not os.getenv("OPENAI_API_KEY"), reason="OPENAI_API_KEY not set"
+)
 
 # 50 vehicles with known correct bolt patterns
 VEHICLES = [
@@ -74,7 +80,35 @@ VEHICLES = [
 ]
 
 
+def test_all_bolt_patterns():
+    """Test that all 50 vehicles resolve correct bolt patterns via the pipeline."""
+    from src.services.dspy_v2 import create_pipeline
+
+    pipeline = create_pipeline(model="openai/gpt-4o-mini")
+    failures = []
+
+    for make, year, model, expected in VEHICLES:
+        result = pipeline.retrieve(f"{year} {make} {model}")
+        bolt_pattern = (
+            result.specs.get("bolt_pattern", "Unknown") if result.specs else "Unknown"
+        )
+        if bolt_pattern.upper() != expected.upper():
+            failures.append(
+                f"{year} {make} {model}: got {bolt_pattern}, expected {expected}"
+            )
+
+    if failures:
+        pytest.fail(
+            f"{len(failures)}/{len(VEHICLES)} bolt pattern mismatches:\n"
+            + "\n".join(f"  - {f}" for f in failures)
+        )
+
+
 def main():
+    """Run bolt pattern test standalone (outside pytest)."""
+    from src.services.dspy_v2 import create_pipeline
+
+    pipeline = create_pipeline(model="openai/gpt-4o-mini")
     passed = 0
     failed = 0
     failures = []
@@ -83,21 +117,21 @@ def main():
     print("=" * 70)
 
     for make, year, model, expected in VEHICLES:
-        specs = search_vehicle_specs_web(
-            year=year, make=make, model=model, chassis_code=None
+        result = pipeline.retrieve(f"{year} {make} {model}")
+        bolt_pattern = (
+            result.specs.get("bolt_pattern", "Unknown") if result.specs else "Unknown"
         )
-        result = specs.get("bolt_pattern", "Unknown")
-        match = result.upper() == expected.upper()
+        match = bolt_pattern.upper() == expected.upper()
 
         if match:
             passed += 1
-            status = "✅"
+            status = "PASS"
         else:
             failed += 1
-            status = "❌"
-            failures.append((make, year, model, expected, result))
+            status = "FAIL"
+            failures.append((make, year, model, expected, bolt_pattern))
 
-        print(f"{status} {year} {make} {model}: {result} (expected: {expected})")
+        print(f"{status} {year} {make} {model}: {bolt_pattern} (expected: {expected})")
 
     print("=" * 70)
     print(f"Results: {passed}/{len(VEHICLES)} passed, {failed} failed")
