@@ -563,6 +563,19 @@ class FitmentPipeline(dspy.Module):
         the response via OpenAI directly.  This method is synchronous and
         should be called from ``asyncio.to_thread()`` in async contexts.
         """
+        try:
+            return self._retrieve_inner(user_input)
+        except Exception as e:
+            logger.error("Pipeline retrieve() failed for %r: %s", user_input, e, exc_info=True)
+            return RetrievalResult(
+                parsed={"user_input": user_input},
+                specs=None,
+                early_response="Something went wrong while looking up that vehicle. Please try again, or provide more details (year, make, model).",
+                validation={"valid": False, "reason": "pipeline_error"},
+            )
+
+    def _retrieve_inner(self, user_input: str) -> RetrievalResult:
+        """Inner retrieval logic, called by retrieve() with error handling."""
         # Step 1: Parse user input
         parsed = self.parse_input(user_input=user_input)
 
@@ -599,10 +612,12 @@ class FitmentPipeline(dspy.Module):
         # Step 3: Validate specs for this vehicle
         # Skip LLM validation for trusted sources — the LLM sometimes
         # incorrectly rejects valid numeric ranges (e.g. offset 10-35 for E30 M3).
-        # Only use LLM validation for unverified/low-confidence specs.
+        # DSPy LLM specs are also trusted because they already went through
+        # SearchVehicleSpecs with chain-of-thought reasoning AND programmatic
+        # validation (bolt pattern format, center bore range) in _resolve_via_llm.
         is_trusted = (
             specs.get("verified") is True
-            or specs.get("source") in ("manual", "dspy_llm_validated")
+            or specs.get("source") in ("manual", "dspy_llm", "dspy_llm_validated")
             or float(specs.get("confidence", 0)) >= 0.85
         )
 
@@ -816,11 +831,21 @@ class FitmentPipeline(dspy.Module):
                 model=model,
                 chassis_code=parsed.get("chassis_code"),
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("DB find_vehicle_specs failed: %s", e)
 
         if db_specs and db_specs.get("bolt_pattern"):
+            logger.info(
+                "DB hit for %s %s (chassis=%s): %s (verified=%s)",
+                parsed.get("make"), model, parsed.get("chassis_code"),
+                db_specs["bolt_pattern"], db_specs.get("verified"),
+            )
             return db_specs
+
+        logger.info(
+            "DB miss for %s %s (chassis=%s, year=%s) — falling back to LLM",
+            parsed.get("make"), model, parsed.get("chassis_code"), parsed.get("year"),
+        )
 
         # Step 2: DSPy LLM resolution
         llm_specs = self._resolve_via_llm(parsed)
