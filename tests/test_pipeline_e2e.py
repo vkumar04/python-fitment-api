@@ -44,7 +44,7 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
     # Check specs
     specs = result.specs
     if not specs:
-        print(f"  FAIL: No specs returned")
+        print("  FAIL: No specs returned")
         return False, "No specs returned"
 
     bolt = specs.get("bolt_pattern", "?")
@@ -69,7 +69,9 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
             calc = w.get("fitment_calc", {})
             print(f"    - {w.get('model')} {int(w.get('diameter',0))}x{w.get('width')} "
                   f"+{w.get('offset')} ({calc.get('style', '?')}, "
-                  f"poke={calc.get('poke_mm', '?')}mm)")
+                  f"poke={calc.get('poke_mm', '?')}mm, "
+                  f"verdict={calc.get('verdict', '?')}, "
+                  f"confidence={calc.get('confidence', '?')})")
 
     # Check community fitments
     community = result.community_fitments
@@ -84,7 +86,7 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
     if result.recommended_setups_str:
         print(f"  Recommendations preview: {result.recommended_setups_str[:200]}...")
     else:
-        print(f"  Recommendations: (none)")
+        print("  Recommendations: (none)")
 
     # Check vehicle summary
     print(f"  Vehicle summary: {result.vehicle_summary}")
@@ -93,8 +95,50 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
     # Validate we got actual fitment data
     has_data = len(kansei) > 0 or len(community) > 0
     if not has_data:
-        print(f"  WARNING: No fitment data at all (no Kansei wheels, no community fitments)")
+        print("  WARNING: No fitment data at all (no Kansei wheels, no community fitments)")
         return False, "No fitment data returned"
+
+    # OEM accuracy assertions for known vehicles (from verified hardcoded registry)
+    base_query = query.lower().split("flush")[0].split("aggressive")[0].split("on ")[0].strip()
+
+    if "e30" in base_query and "m3" in base_query:
+        oem_w = specs.get("oem_width")
+        oem_o = specs.get("oem_offset")
+        if oem_w != 7.0:
+            print(f"  FAIL: E30 M3 oem_width should be 7.0, got {oem_w}")
+            return False, f"E30 M3 wrong oem_width: {oem_w} != 7.0"
+        if oem_o != 25:
+            print(f"  FAIL: E30 M3 oem_offset should be 25, got {oem_o}")
+            return False, f"E30 M3 wrong oem_offset: {oem_o} != 25"
+        if specs.get("is_staggered_stock"):
+            print("  FAIL: E30 M3 should NOT be staggered")
+            return False, "E30 M3 incorrectly marked as staggered"
+        print(f"  E30 M3 OEM checks: width={oem_w}, offset={oem_o}, staggered=False ✓")
+
+    elif "e36" in base_query and "m3" in base_query:
+        oem_w = specs.get("oem_width")
+        oem_o = specs.get("oem_offset")
+        if oem_w != 7.5:
+            print(f"  FAIL: E36 M3 oem_width should be 7.5, got {oem_w}")
+            return False, f"E36 M3 wrong oem_width: {oem_w} != 7.5"
+        if oem_o != 41:
+            print(f"  FAIL: E36 M3 oem_offset should be 41, got {oem_o}")
+            return False, f"E36 M3 wrong oem_offset: {oem_o} != 41"
+        if specs.get("is_staggered_stock"):
+            print("  FAIL: E36 M3 should NOT be staggered")
+            return False, "E36 M3 incorrectly marked as staggered"
+        print(f"  E36 M3 OEM checks: width={oem_w}, offset={oem_o}, staggered=False ✓")
+
+    elif "civic" in base_query and "2020" in base_query:
+        oem_w = specs.get("oem_width")
+        oem_o = specs.get("oem_offset")
+        if oem_w is not None and oem_w != 7.0:
+            print(f"  FAIL: 2020 Civic oem_width should be 7.0, got {oem_w}")
+            return False, f"2020 Civic wrong oem_width: {oem_w} != 7.0"
+        if oem_o is not None and oem_o != 45:
+            print(f"  FAIL: 2020 Civic oem_offset should be 45, got {oem_o}")
+            return False, f"2020 Civic wrong oem_offset: {oem_o} != 45"
+        print(f"  2020 Civic OEM checks: width={oem_w}, offset={oem_o} ✓")
 
     # E39 M5 specific checks: brake clearance + staggered detection
     if "E39" in query and "M5" in query and not any(
@@ -107,7 +151,7 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
 
         is_staggered = specs.get("is_staggered_stock")
         if not is_staggered:
-            print(f"  FAIL: E39 M5 should be detected as staggered stock")
+            print("  FAIL: E39 M5 should be detected as staggered stock")
             return False, "E39 M5 not detected as staggered"
 
         # No 17" wheels should be recommended
@@ -118,12 +162,21 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
 
         oem_w = specs.get("oem_width")
         if oem_w is None:
-            print(f"  FAIL: E39 M5 should have oem_width enriched from LLM")
+            print("  FAIL: E39 M5 should have oem_width from verified registry")
             return False, "E39 M5 oem_width is None"
+        if oem_w != 8.0:
+            print(f"  FAIL: E39 M5 oem_width should be 8.0, got {oem_w}")
+            return False, f"E39 M5 wrong oem_width: {oem_w} != 8.0"
 
-        print(f"  E39 M5 checks: brake_min={brake_min}, staggered={is_staggered}, oem_width={oem_w}")
+        oem_rw = specs.get("oem_rear_width")
+        if oem_rw != 9.5:
+            print(f"  FAIL: E39 M5 oem_rear_width should be 9.5, got {oem_rw}")
+            return False, f"E39 M5 wrong oem_rear_width: {oem_rw} != 9.5"
 
-    print(f"  PASS")
+        print(f"  E39 M5 checks: brake_min={brake_min}, staggered={is_staggered}, "
+              f"oem_width={oem_w}, oem_rear_width={oem_rw}")
+
+    print("  PASS")
     return True, None
 
 
