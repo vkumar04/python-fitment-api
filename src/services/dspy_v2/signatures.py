@@ -274,13 +274,31 @@ class SearchVehicleSpecs(dspy.Signature):
     center_bore: float = dspy.OutputField(desc="Center bore in mm")
     stud_size: str = dspy.OutputField(desc="e.g., 'M12x1.5'")
     oem_diameter: int = dspy.OutputField(desc="Stock wheel diameter")
-    min_diameter: int = dspy.OutputField(desc="Minimum safe diameter")
+    min_brake_clearance_diameter: int = dspy.OutputField(
+        desc="Minimum diameter that clears the brake calipers. For cars with big brakes "
+        "(e.g. BMW M cars with Brembo, Civic Type R, Subaru STI), this is often 17\" or 18\". "
+        "For economy cars with small brakes, this can be as low as 14\"."
+    )
+    min_diameter: int = dspy.OutputField(desc="Minimum safe diameter (at least min_brake_clearance_diameter)")
     max_diameter: int = dspy.OutputField(desc="Maximum recommended diameter")
-    oem_width: float = dspy.OutputField(desc="Stock wheel width")
+    oem_width: float = dspy.OutputField(desc="Stock FRONT wheel width in inches")
+    oem_rear_width: float = dspy.OutputField(
+        desc="Stock REAR wheel width in inches. Same as oem_width for square setups, "
+        "wider for staggered (e.g. E39 M5 is 8.0 front / 9.5 rear)."
+    )
     min_width: float = dspy.OutputField(desc="Minimum recommended width")
     max_width: float = dspy.OutputField(desc="Maximum recommended width")
-    oem_offset: int = dspy.OutputField(desc="Stock offset")
+    oem_offset: int = dspy.OutputField(desc="Stock FRONT offset in mm")
+    oem_rear_offset: int = dspy.OutputField(
+        desc="Stock REAR offset in mm. Same as oem_offset for square setups, "
+        "different for staggered (e.g. E39 M5 is +20 front / +22 rear)."
+    )
     min_offset: int = dspy.OutputField(desc="Minimum offset (more poke)")
     max_offset: int = dspy.OutputField(desc="Maximum offset (more tuck)")
+    is_staggered_stock: bool = dspy.OutputField(
+        desc="True if the vehicle came from factory with a staggered setup "
+        "(different front/rear wheel sizes). E.g. E39 M5 (18x8/18x9.5), "
+        "C6 Corvette (18x8.5/19x10), 370Z (18x8/18x9). False for square setups."
+    )
     source_url: str = dspy.OutputField(desc="Primary source URL for this data")
     confidence: float = dspy.OutputField(desc="0.0-1.0 confidence in the data")

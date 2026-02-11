@@ -477,6 +477,7 @@ def generate_recommended_setups(
     wheels: list[dict[str, Any]],
     fitment_style: str | None = None,
     suspension: str | None = None,
+    specs: dict[str, Any] | None = None,
 ) -> str:
     """Generate pre-computed setup recommendations using math.
 
@@ -607,6 +608,32 @@ def generate_recommended_setups(
         if square_setup['url']:
             lines.append(f"Kansei: [{square_setup['model']}]({square_setup['url']})")
         lines.append("")
+
+    # Add vehicle-specific warnings
+    if specs:
+        # Brake clearance warning
+        brake_min = specs.get("min_brake_clearance_diameter")
+        oem_d = specs.get("oem_diameter")
+        if brake_min and oem_d and brake_min >= 17:
+            lines.append(f"⚠️ BRAKE CLEARANCE: This vehicle has large brakes that require "
+                         f"minimum {brake_min}\" wheels. Smaller wheels will NOT physically fit "
+                         f"over the calipers. Stock wheel diameter is {oem_d}\".")
+            lines.append("")
+
+        # Staggered-stock warning
+        if specs.get("is_staggered_stock"):
+            oem_w = specs.get("oem_width", "?")
+            oem_rw = specs.get("oem_rear_width", "?")
+            oem_o = specs.get("oem_offset", "?")
+            oem_ro = specs.get("oem_rear_offset", "?")
+            lines.append(
+                f"⚠️ STAGGERED STOCK: This vehicle runs staggered from factory "
+                f"(front {oem_w}\" +{oem_o} / rear {oem_rw}\" +{oem_ro}). "
+                f"A square setup changes the rear handling balance. "
+                f"If Kansei doesn't offer the right rear width, consider "
+                f"whether the handling tradeoff is acceptable."
+            )
+            lines.append("")
 
     lines.append("IMPORTANT: Present these EXACT specs to the user. Do not invent different sizes.")
 
