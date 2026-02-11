@@ -20,6 +20,8 @@ from typing import Any
 import dspy
 
 from . import db
+from .fitment_envelopes import get_envelope
+from .oem_specs import lookup_oem_specs
 from .signatures import (
     GenerateFitmentResponse,
     ParseVehicleInput,
@@ -322,6 +324,7 @@ def calculate_wheel_fitment(
     oem_width_inches: float,
     oem_offset_mm: int,
     suspension: str = "stock",
+    envelope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Calculate fitment geometry for a wheel compared to OEM specs.
 
@@ -333,9 +336,8 @@ def calculate_wheel_fitment(
     Lower offset = wheel sits further outboard (poke).
 
     Formulas:
-    - Poke (outer lip position) = (width_diff × 25.4 / 2) + (oem_offset - wheel_offset)
-    - Inner change = how much closer the inner lip is to suspension
-      = (width_diff × 25.4 / 2) + (wheel_offset - oem_offset)
+    - outer_delta (poke) = (width_diff × 25.4 / 2) + (oem_offset - wheel_offset)
+    - inner_delta = (width_diff × 25.4 / 2) - (wheel_offset - oem_offset)
 
     Args:
         wheel_width_inches: Aftermarket wheel width (e.g., 9.0)
@@ -343,6 +345,7 @@ def calculate_wheel_fitment(
         oem_width_inches: Stock wheel width (e.g., 7.5)
         oem_offset_mm: Stock wheel offset (e.g., +41)
         suspension: Suspension type affects acceptable poke
+        envelope: Optional per-chassis fitment envelope with thresholds
 
     Returns:
         Dict with calculated fitment values and whether it's likely to fit
@@ -359,64 +362,70 @@ def calculate_wheel_fitment(
     poke_mm = (width_diff_mm / 2) + offset_diff
 
     # Inner clearance change: how much closer the inner lip is to suspension
-    # Positive value = inner lip moved inward (closer to strut - potentially bad)
-    # Negative value = inner lip moved outward (more clearance - good)
-    #
-    # - Wider wheel: inner lip moves inward by half width increase
-    # - Higher offset: mounting face closer to outer edge, so inner lip moves OUTWARD
-    # - Lower offset: mounting face closer to inner edge, so inner lip moves INWARD
     inner_change_mm = (width_diff_mm / 2) - (wheel_offset_mm - oem_offset_mm)
 
-    # Acceptable poke thresholds based on suspension
-    # These are realistic for aftermarket wheels - most enthusiast setups
-    # run some poke even on stock suspension
-    poke_limits = {
-        "stock": 18,       # Stock suspension: ~18mm poke is daily-able
-        "lowered": 25,     # Lowered: more aggressive OK with roll
-        "coilovers": 35,   # Coilovers: can adjust camber, more poke OK
-        "air": 50,         # Air: max flexibility when aired out
-        "lifted": 10,      # Lifted trucks: less poke tolerance
-    }
+    # Use envelope thresholds if available, otherwise global defaults
+    if envelope:
+        max_poke = envelope.get("max_outer_delta_mm", 18)
+        max_inner = envelope.get("max_inner_delta_mm", 20)
+        roll_threshold = envelope.get("roll_threshold_mm", max_poke + 5)
+        pull_threshold = envelope.get("pull_threshold_mm", max_poke + 15)
+    else:
+        # Global fallback thresholds (legacy behavior)
+        poke_limits = {
+            "stock": 18, "lowered": 25, "coilovers": 35, "air": 50, "lifted": 10,
+        }
+        inner_limits = {
+            "stock": 20, "lowered": 20, "coilovers": 25, "air": 30, "lifted": 20,
+        }
+        max_poke = poke_limits.get(suspension, 10)
+        max_inner = inner_limits.get(suspension, 15)
+        roll_threshold = max_poke + 5
+        pull_threshold = max_poke + 15
 
-    # Inner clearance limits (strut/shock clearance)
-    inner_limits = {
-        "stock": 20,
-        "lowered": 20,
-        "coilovers": 25,   # Coilovers often have slimmer bodies
-        "air": 30,
-        "lifted": 20,
-    }
-
-    max_poke = poke_limits.get(suspension, 10)
-    max_inner = inner_limits.get(suspension, 15)
-
-    # Determine if it fits
+    # Determine if it fits without mods
     fits = poke_mm <= max_poke and inner_change_mm <= max_inner
 
     # Fitment style based on poke
-    # Note: On wide-body/flared cars (E30 M3, E36 M3), the flares absorb
-    # more poke visually, so +10mm may still look "flush"
     if poke_mm < -5:
         style = "tucked"
     elif poke_mm < 10:
-        style = "flush"  # Up to 10mm is visually flush on most cars
+        style = "flush"
     elif poke_mm < 20:
-        style = "mild poke"  # 10-20mm is noticeable but daily-able
+        style = "mild poke"
     else:
-        style = "aggressive poke"  # 20mm+ requires mods on most cars
+        style = "aggressive poke"
 
-    # Modification notes
-    mods_needed = []
+    # Modification notes using envelope thresholds
+    mods_needed: list[str] = []
     if poke_mm > max_poke:
-        if poke_mm > max_poke + 15:
-            mods_needed.append("fender flares or wide body kit")
-        elif poke_mm > max_poke + 5:
-            mods_needed.append("fender rolling/pulling")
+        if poke_mm > pull_threshold:
+            mods_needed.append("fender pulling/flaring required")
+        elif poke_mm > roll_threshold:
+            mods_needed.append("fender rolling required")
         else:
             mods_needed.append("minor fender adjustment")
 
     if inner_change_mm > max_inner:
-        mods_needed.append("may need thinner strut spacers or camber arms")
+        mods_needed.append("camber adjustment or strut spacers needed")
+
+    # Determine verdict
+    if not mods_needed:
+        verdict = "fits"
+    elif any("pulling" in m or "flaring" in m for m in mods_needed):
+        verdict = "fits_with_mods"
+    elif any("rolling" in m for m in mods_needed):
+        verdict = "fits_with_mods"
+    else:
+        verdict = "fits_with_mods"
+
+    # Hard fail conditions
+    if poke_mm > pull_threshold + 15:
+        verdict = "does_not_fit"
+        mods_needed = [f"excessive poke ({poke_mm:.0f}mm) — will not fit this chassis"]
+    if inner_change_mm > max_inner + 15:
+        verdict = "does_not_fit"
+        mods_needed.append(f"inner clearance exceeded ({inner_change_mm:.0f}mm) — strut contact likely")
 
     return {
         "poke_mm": round(poke_mm, 1),
@@ -425,6 +434,7 @@ def calculate_wheel_fitment(
         "style": style,
         "mods_needed": mods_needed,
         "suspension": suspension,
+        "verdict": verdict,
     }
 
 
@@ -681,6 +691,8 @@ class FitmentPipeline(dspy.Module):
             specs=specs,
             kansei_wheels=kansei_wheels,
             suspension=parsed_info.get("suspension"),
+            fitment_style=parsed_info.get("fitment_style"),
+            chassis_code=parsed_info.get("chassis_code"),
         )
 
         # Build set of available Kansei sizes for filtering community fitments
@@ -850,33 +862,39 @@ class FitmentPipeline(dspy.Module):
             db_specs["_from_db"] = True
 
             # If DB has bolt pattern but is missing OEM specs (old schema),
-            # enrich with LLM-resolved values for accurate poke calculations
-            # and brake clearance checks
+            # enrich from hardcoded verified OEM registry (NOT LLM — LLM is
+            # unreliable for safety-critical OEM values like width/offset).
             missing_oem = (
                 db_specs.get("oem_width") is None
                 or db_specs.get("oem_offset") is None
                 or db_specs.get("oem_diameter") is None
             )
             if missing_oem:
-                logger.info(
-                    "DB specs missing OEM values — enriching with LLM for %s %s",
-                    parsed.get("make"), model,
+                oem = lookup_oem_specs(
+                    make=parsed.get("make"),
+                    model=model,
+                    chassis_code=parsed.get("chassis_code"),
+                    year=parsed.get("year"),
                 )
-                llm_enrichment = self._resolve_via_llm(parsed)
-                if llm_enrichment:
-                    # Only fill in what's missing; DB bolt pattern is authoritative
+                if oem:
+                    logger.info(
+                        "DB specs missing OEM values — enriched from verified registry for %s %s",
+                        parsed.get("make"), model,
+                    )
                     for key in (
                         "oem_diameter", "oem_width", "oem_offset",
                         "oem_rear_width", "oem_rear_offset",
                         "is_staggered_stock", "min_brake_clearance_diameter",
                     ):
-                        if db_specs.get(key) is None and key in llm_enrichment:
-                            db_specs[key] = llm_enrichment[key]
-                    # Also update diameter/width/offset ranges if DB has defaults
-                    if db_specs.get("min_diameter") == 15 and llm_enrichment.get("min_diameter"):
-                        db_specs["min_diameter"] = llm_enrichment["min_diameter"]
-                    if db_specs.get("max_diameter") == 20 and llm_enrichment.get("max_diameter"):
-                        db_specs["max_diameter"] = llm_enrichment["max_diameter"]
+                        if db_specs.get(key) is None and key in oem:
+                            db_specs[key] = oem[key]
+                else:
+                    logger.warning(
+                        "DB specs missing OEM values and no verified OEM data for %s %s — "
+                        "fitment calculations will use conservative defaults",
+                        parsed.get("make"), model,
+                    )
+                    db_specs["_oem_estimated"] = True
 
             return db_specs
 
@@ -921,6 +939,29 @@ class FitmentPipeline(dspy.Module):
             }
         else:
             return None
+
+        # Step 4b: Overlay verified OEM specs (LLM OEM values are unreliable)
+        oem = lookup_oem_specs(
+            make=parsed.get("make"),
+            model=model,
+            chassis_code=parsed.get("chassis_code"),
+            year=parsed.get("year"),
+        )
+        if oem:
+            logger.info(
+                "Overlaying verified OEM specs for %s %s from hardcoded registry",
+                parsed.get("make"), model,
+            )
+            for key in (
+                "oem_diameter", "oem_width", "oem_offset",
+                "oem_rear_width", "oem_rear_offset",
+                "is_staggered_stock", "min_brake_clearance_diameter",
+            ):
+                if key in oem:
+                    final_specs[key] = oem[key]
+        else:
+            # No verified OEM data — flag for conservative defaults
+            final_specs["_oem_estimated"] = True
 
         # Step 5: Cache to DB for future lookups
         try:
@@ -1114,46 +1155,75 @@ class FitmentPipeline(dspy.Module):
         specs: dict[str, Any],
         kansei_wheels: list[dict[str, Any]],
         suspension: str | None,
+        fitment_style: str | None = None,
+        chassis_code: str | None = None,
     ) -> dict[str, Any]:
-        """Validate which Kansei wheels actually fit using math-based calculations.
+        """Validate which Kansei wheels fit using deterministic geometry solver.
 
-        Uses geometry formulas to calculate poke and inner clearance, rather than
-        just checking if values fall within ranges. This gives more accurate
-        fitment predictions.
+        Uses per-chassis fitment envelopes for thresholds, with global defaults
+        as fallback. Hub bore compatibility is enforced. OEM specs come from
+        the verified hardcoded registry, not from LLM.
         """
         if not kansei_wheels:
             return {
                 "valid": [],
                 "rejected": [],
                 "summary": "No Kansei wheels available for this bolt pattern",
+                "confidence": "low",
             }
 
         susp = suspension or "stock"
 
+        # Get per-chassis envelope (or global defaults)
+        envelope, confidence = get_envelope(chassis_code, fitment_style, susp)
+
         # Get OEM specs for math calculations
-        # Use `or` instead of default arg because DB may have key=None (old schema)
         oem_width = specs.get("oem_width") or specs.get("min_width") or 7.0
         oem_offset = specs.get("oem_offset") or (
             ((specs.get("min_offset") or 20) + (specs.get("max_offset") or 40)) // 2
         )
-        # For staggered-stock vehicles, track rear OEM specs separately
         is_staggered = specs.get("is_staggered_stock", False)
         oem_rear_width = specs.get("oem_rear_width") or oem_width
         oem_rear_offset = specs.get("oem_rear_offset") or oem_offset
 
+        # If OEM specs are estimated (not from verified source), add safety margin
+        oem_estimated = specs.get("_oem_estimated", False)
+        if oem_estimated:
+            # Reduce all envelope thresholds by 5mm for safety
+            envelope = dict(envelope)
+            for k in ("max_outer_delta_mm", "max_inner_delta_mm"):
+                if k in envelope:
+                    envelope[k] = max(5, envelope[k] - 5)
+
         # Brake clearance minimum
         brake_min = specs.get("min_brake_clearance_diameter") or specs.get("min_diameter") or 15
 
+        # Hub bore compatibility (Kansei wheels have 73.1mm bore)
+        kansei_bore = 73.1
+        hub_bore = float(specs.get("center_bore", 0))
+        if hub_bore > kansei_bore:
+            hub_solution = "incompatible"
+            hub_note = (
+                f"Hub bore {hub_bore}mm > Kansei bore {kansei_bore}mm — "
+                f"wheel cannot center on hub. Professional machining required."
+            )
+        elif hub_bore > 0 and hub_bore < kansei_bore:
+            hub_solution = "hub_rings"
+            hub_note = f"Hub rings required ({kansei_bore}mm → {hub_bore}mm)"
+        else:
+            hub_solution = "direct"
+            hub_note = ""
+
         # Filter wheels using math-based calculations
-        valid_wheels = []
-        rejected_wheels = []
+        valid_wheels: list[dict[str, Any]] = []
+        rejected_wheels: list[dict[str, Any]] = []
 
         for wheel in kansei_wheels:
             offset = wheel.get("offset", 0)
             diameter = wheel.get("diameter", 0)
             width = wheel.get("width", 0)
 
-            rejection_reasons = []
+            rejection_reasons: list[str] = []
 
             # Check brake clearance first (hard physical limit)
             if diameter < brake_min:
@@ -1165,17 +1235,21 @@ class FitmentPipeline(dspy.Module):
                     f'Diameter {diameter}" too large (max {specs.get("max_diameter")}")'
                 )
 
-            # Use math-based fitment calculation (front baseline)
+            # Hub bore hard fail
+            if hub_solution == "incompatible":
+                rejection_reasons.append(hub_note)
+
+            # Use envelope-based fitment calculation (front baseline)
             fitment_calc = calculate_wheel_fitment(
                 wheel_width_inches=width,
                 wheel_offset_mm=offset,
                 oem_width_inches=oem_width,
                 oem_offset_mm=oem_offset,
                 suspension=susp,
+                envelope=envelope,
             )
 
             # For staggered-stock vehicles, also calculate rear fitment
-            # so we can warn about width/offset mismatch
             if is_staggered and oem_rear_width != oem_width:
                 rear_calc = calculate_wheel_fitment(
                     wheel_width_inches=width,
@@ -1183,32 +1257,56 @@ class FitmentPipeline(dspy.Module):
                     oem_width_inches=oem_rear_width,
                     oem_offset_mm=oem_rear_offset,
                     suspension=susp,
+                    envelope=envelope,
                 )
                 fitment_calc["rear_poke_mm"] = rear_calc["poke_mm"]
                 fitment_calc["rear_style"] = rear_calc["style"]
+                fitment_calc["rear_verdict"] = rear_calc["verdict"]
                 fitment_calc["is_staggered_stock"] = True
             else:
                 fitment_calc["is_staggered_stock"] = False
 
-            # Check if math says it fits
+            # Add hub info to calc
+            fitment_calc["hub_solution"] = hub_solution
+            if hub_note:
+                fitment_calc["hub_note"] = hub_note
+
+            # Add confidence
+            fitment_calc["confidence"] = confidence
+
+            # Check if verdict is hard fail
+            if fitment_calc["verdict"] == "does_not_fit":
+                rejection_reasons.extend(fitment_calc["mods_needed"])
+
+            # Also reject excessive poke/inner that didn't trigger hard fail
             if not fitment_calc["fits_without_mods"] and fitment_calc["poke_mm"] > 25:
-                rejection_reasons.append(
-                    f"Too much poke ({fitment_calc['poke_mm']}mm) for {susp} suspension"
-                )
+                if fitment_calc["verdict"] != "does_not_fit":
+                    rejection_reasons.append(
+                        f"Too much poke ({fitment_calc['poke_mm']}mm) for {susp} suspension"
+                    )
 
             if fitment_calc["inner_change_mm"] > 25:
-                rejection_reasons.append(
-                    f"Inner clearance issue ({fitment_calc['inner_change_mm']}mm closer to suspension)"
-                )
+                if fitment_calc["verdict"] != "does_not_fit":
+                    rejection_reasons.append(
+                        f"Inner clearance issue ({fitment_calc['inner_change_mm']}mm closer to suspension)"
+                    )
 
             if rejection_reasons:
                 wheel["rejection_reasons"] = rejection_reasons
                 rejected_wheels.append(wheel)
             else:
-                # Add fitment notes based on math calculations
-                notes = []
+                # Build fitment notes
+                notes: list[str] = []
 
-                # Poke-based notes (consistent with style thresholds)
+                # Verdict
+                verdict = fitment_calc["verdict"]
+                if verdict == "fits":
+                    notes.append("✅ Fits (No Mods)")
+                elif verdict == "fits_with_mods":
+                    mod_list = ", ".join(fitment_calc["mods_needed"])
+                    notes.append(f"⚠️ Fits With Mods: {mod_list}")
+
+                # Poke-based notes
                 poke = fitment_calc["poke_mm"]
                 if poke > 20:
                     notes.append(f"aggressive poke ({poke:.0f}mm)")
@@ -1219,19 +1317,18 @@ class FitmentPipeline(dspy.Module):
                 else:
                     notes.append(f"tucked ({abs(poke):.0f}mm inside fender)")
 
-                # Modification notes from math
-                if fitment_calc["mods_needed"]:
-                    notes.extend(fitment_calc["mods_needed"])
-
                 # Inner clearance notes
                 inner = fitment_calc["inner_change_mm"]
                 if inner > 10:
                     notes.append(f"check strut clearance ({inner:.0f}mm closer than stock)")
 
+                # Hub bore note
+                if hub_solution == "hub_rings":
+                    notes.append(hub_note)
+
                 if diameter == specs.get("max_diameter"):
                     notes.append("maximum recommended diameter")
 
-                # Brake clearance warning for minimum-clearing sizes
                 if diameter == brake_min:
                     notes.append("minimum diameter — verify brake caliper clearance before purchase")
 
@@ -1242,6 +1339,14 @@ class FitmentPipeline(dspy.Module):
                         f"⚠️ vehicle is staggered from factory — "
                         f"this square setup changes rear: {rear_poke:+.0f}mm vs stock"
                     )
+
+                # OEM estimated warning
+                if oem_estimated:
+                    notes.append("⚠️ OEM specs estimated — verify fitment before purchase")
+
+                # Confidence
+                if confidence == "medium":
+                    notes.append("confidence: medium (no chassis-specific envelope)")
 
                 wheel["fitment_notes"] = notes
                 wheel["fitment_calc"] = fitment_calc
@@ -1255,6 +1360,8 @@ class FitmentPipeline(dspy.Module):
             "valid": valid_wheels,
             "rejected": rejected_wheels,
             "summary": summary,
+            "confidence": confidence,
+            "hub_solution": hub_solution,
         }
 
     def _filter_community_by_kansei(

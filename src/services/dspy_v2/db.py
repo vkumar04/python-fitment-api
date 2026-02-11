@@ -580,6 +580,10 @@ def generate_recommended_setups(
             "url": url,
             "model": w.get("model", ""),
             "suspension": susp,
+            "verdict": calc.get("verdict", "fits"),
+            "hub_solution": calc.get("hub_solution", "direct"),
+            "hub_note": calc.get("hub_note", ""),
+            "confidence": calc.get("confidence", "medium"),
         }
         break
 
@@ -588,7 +592,16 @@ def generate_recommended_setups(
 
     if square_setup:
         susp_label = square_setup['suspension'].title()
-        lines.append(f"**Recommended Setup ({square_setup['style']}, {susp_label} suspension)**")
+        verdict = square_setup.get('verdict', 'fits')
+
+        # Verdict line
+        if verdict == "fits":
+            lines.append(f"✅ **Recommended Setup ({square_setup['style']}, {susp_label} suspension)**")
+        elif verdict == "fits_with_mods":
+            lines.append(f"⚠️ **Setup ({square_setup['style']}, {susp_label} suspension) — Mods Required**")
+        else:
+            lines.append(f"❌ **Setup ({square_setup['style']}, {susp_label} suspension) — Does Not Fit**")
+
         lines.append(f"Front: {square_setup['front']} | Rear: {square_setup['rear']}")
         lines.append(f"Tire: {square_setup['tire']} (recommended for {susp_label})")
         lines.append(f"  → Sidewall: {square_setup['sidewall_mm']}mm | {square_setup['tire_notes']}")
@@ -596,7 +609,17 @@ def generate_recommended_setups(
             lines.append(f"Alternative: {square_setup['tire_alt']} (only if you need more clearance)")
         lines.append(f"Calculated poke: {square_setup['poke']:+.0f}mm ({square_setup['style']})")
 
-        # Mods logic depends on suspension + tire combo
+        # Hub solution
+        hub_sol = square_setup.get('hub_solution', 'direct')
+        if hub_sol == "hub_rings":
+            hub_note = square_setup.get('hub_note', 'Hub rings required')
+            lines.append(f"Hub: {hub_note}")
+        elif hub_sol == "incompatible":
+            lines.append("Hub: ❌ INCOMPATIBLE — wheel bore smaller than hub, machining required")
+        else:
+            lines.append("Hub: Direct fit")
+
+        # Mods logic
         if square_setup['mods']:
             lines.append(f"Mods needed: {', '.join(square_setup['mods'])}")
         elif square_setup['suspension'] in ("air", "bagged", "bags"):
@@ -605,6 +628,16 @@ def generate_recommended_setups(
             lines.append("Mods needed: None with recommended tire (may rub with wider/taller tires)")
         else:
             lines.append("Mods needed: None (daily-safe)")
+
+        # Confidence
+        confidence = square_setup.get('confidence', 'medium')
+        if confidence == "high":
+            lines.append("Confidence: High (chassis-specific envelope data)")
+        elif confidence == "medium":
+            lines.append("Confidence: Medium (global defaults — test fit recommended)")
+        else:
+            lines.append("Confidence: Low — test fit strongly recommended")
+
         if square_setup['url']:
             lines.append(f"Kansei: [{square_setup['model']}]({square_setup['url']})")
         lines.append("")
