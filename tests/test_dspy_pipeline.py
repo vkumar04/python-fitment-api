@@ -88,70 +88,94 @@ class TestParseVehicleInput:
         assert result.clarification_needed is not None
 
 
-class TestToolsLookup:
-    """Test the web search tools."""
+class TestSearchVehicleSpecs:
+    """Test the SearchVehicleSpecs DSPy signature directly."""
 
-    def test_lookup_bmw_e30_m3_specs(self):
-        """Test looking up BMW E30 M3 specs - should return 5x120, NOT 4x100 like base E30."""
-        from src.services.dspy_v2.tools import search_vehicle_specs_web
+    def test_llm_resolves_e30_m3(self):
+        """Test that the LLM knows E30 M3 is 5x120, not 4x100 like base E30."""
+        import dspy
 
-        result = search_vehicle_specs_web(
-            year=1989, make="BMW", model="M3", chassis_code="E30"
+        from src.services.dspy_v2.signatures import SearchVehicleSpecs
+
+        lm = dspy.LM("openai/gpt-4o", max_tokens=512)
+        dspy.configure(lm=lm)
+
+        search = dspy.ChainOfThought(SearchVehicleSpecs)
+        result = search(
+            year=1989, make="BMW", model="M3", chassis_code="E30", trim=None
         )
 
-        assert result["found"]
-        # E30 M3 uses 5x120 (different hubs/brakes from base E30's 4x100)
+        assert str(result.bolt_pattern).strip() == "5x120"
+        assert abs(float(result.center_bore) - 72.6) < 1.0
+
+    def test_llm_resolves_civic_type_r(self):
+        """Test that the LLM knows Civic Type R FK8 is 5x120, not 5x114.3."""
+        import dspy
+
+        from src.services.dspy_v2.signatures import SearchVehicleSpecs
+
+        lm = dspy.LM("openai/gpt-4o", max_tokens=512)
+        dspy.configure(lm=lm)
+
+        search = dspy.ChainOfThought(SearchVehicleSpecs)
+        result = search(
+            year=2020,
+            make="Honda",
+            model="Civic Type R",
+            chassis_code="FK8",
+            trim="Type R",
+        )
+
+        assert str(result.bolt_pattern).strip() == "5x120"
+
+    def test_llm_resolves_g80_m3(self):
+        """Test that the LLM knows G80 M3 is 5x112, not 5x120."""
+        import dspy
+
+        from src.services.dspy_v2.signatures import SearchVehicleSpecs
+
+        lm = dspy.LM("openai/gpt-4o", max_tokens=512)
+        dspy.configure(lm=lm)
+
+        search = dspy.ChainOfThought(SearchVehicleSpecs)
+        result = search(
+            year=2023, make="BMW", model="M3", chassis_code="G80", trim=None
+        )
+
+        assert str(result.bolt_pattern).strip() == "5x112"
+
+
+class TestCrossValidation:
+    """Test the _cross_validate static method."""
+
+    def test_matching_bolt_patterns(self):
+        """When LLM and scrape agree, use LLM ranges at high confidence."""
+        from src.services.dspy_v2.pipeline import FitmentPipeline
+
+        llm = {"bolt_pattern": "5x120", "center_bore": 72.6, "min_offset": 10, "max_offset": 35, "source": "dspy_llm"}
+        scrape = {"bolt_pattern": "5x120", "center_bore": 72.6, "min_offset": 15, "max_offset": 40}
+
+        result = FitmentPipeline._cross_validate(llm, scrape)
+
         assert result["bolt_pattern"] == "5x120"
-        assert result["center_bore"] == 72.6
+        assert result["confidence"] == 0.80
+        assert result["source"] == "dspy_llm_validated"
+        # LLM ranges preserved
+        assert result["min_offset"] == 10
 
-    def test_lookup_bmw_e30_base_specs(self):
-        """Test looking up regular BMW E30 specs - should return 4x100."""
-        from src.services.dspy_v2.tools import search_vehicle_specs_web
+    def test_mismatched_bolt_patterns(self):
+        """When LLM and scrape disagree, prefer scrape bolt pattern."""
+        from src.services.dspy_v2.pipeline import FitmentPipeline
 
-        result = search_vehicle_specs_web(
-            year=1989, make="BMW", model="325i", chassis_code="E30"
-        )
+        llm = {"bolt_pattern": "5x114.3", "center_bore": 57.1, "stud_size": "M12x1.5"}
+        scrape = {"bolt_pattern": "4x100", "center_bore": 57.1, "stud_size": "M12x1.5",
+                  "min_diameter": 13, "max_diameter": 17}
 
-        assert result["found"]
-        # Regular E30 uses 4x100
+        result = FitmentPipeline._cross_validate(llm, scrape)
+
         assert result["bolt_pattern"] == "4x100"
-        assert result["center_bore"] == 57.1
-
-    def test_lookup_honda_specs(self):
-        """Test looking up Honda Civic specs."""
-        from src.services.dspy_v2.tools import search_vehicle_specs_web
-
-        result = search_vehicle_specs_web(
-            year=2020, make="Honda", model="Civic", chassis_code=None
-        )
-
-        assert result["found"]
-        assert "114.3" in result["bolt_pattern"]  # 5x114.3
-
-    def test_e30_m3_without_chassis_code(self):
-        """Test that M3 query resolves to correct specs even without explicit chassis code."""
-        from src.services.dspy_v2.tools import search_vehicle_specs_web
-
-        result = search_vehicle_specs_web(
-            year=1989, make="BMW", model="M3", chassis_code=None
-        )
-
-        assert result["found"]
-        # Should resolve to E30 M3 based on year, and return 5x120
-        assert result["bolt_pattern"] == "5x120"
-        assert result["center_bore"] == 72.6
-
-    def test_e30_m3_case_insensitive(self):
-        """Test that M3 lookup is case-insensitive."""
-        from src.services.dspy_v2.tools import search_vehicle_specs_web
-
-        result = search_vehicle_specs_web(
-            year=1989, make="bmw", model="m3", chassis_code="e30"
-        )
-
-        assert result["found"]
-        assert result["bolt_pattern"] == "5x120"
-        assert result["center_bore"] == 72.6
+        assert result["confidence"] == 0.70
+        assert result["source"] == "wheel_size_scrape"
 
 
 class TestFullPipeline:
@@ -173,9 +197,9 @@ class TestFullPipeline:
         assert result.parsed.get("make") == "BMW"
         assert result.parsed.get("model") == "M3"
 
-        # Check specs were resolved
+        # Check specs were resolved — E30 M3 is 5x120
         assert result.specs is not None
-        assert result.specs.get("bolt_pattern") == "4x100"
+        assert result.specs.get("bolt_pattern") == "5x120"
 
     def test_pipeline_invalid_vehicle(self):
         """Test pipeline handles invalid vehicle gracefully."""
