@@ -616,7 +616,8 @@ class FitmentPipeline(dspy.Module):
         # SearchVehicleSpecs with chain-of-thought reasoning AND programmatic
         # validation (bolt pattern format, center bore range) in _resolve_via_llm.
         is_trusted = (
-            specs.get("verified") is True
+            specs.get("_from_db") is True
+            or specs.get("verified") is True
             or specs.get("source") in ("manual", "dspy_llm", "dspy_llm_validated")
             or float(specs.get("confidence", 0)) >= 0.85
         )
@@ -789,6 +790,9 @@ class FitmentPipeline(dspy.Module):
                 # DSPy sometimes appends schema notes to values like:
                 # "Honda        # note: the value you produce must adhere..."
                 val = val.split("# note:")[0].split("#")[0].strip()
+                # DSPy sometimes wraps values in quotes
+                if val.startswith('"') and val.endswith('"'):
+                    val = val[1:-1]
                 if not val or val.lower() == "none":
                     return None
                 return val
@@ -840,6 +844,8 @@ class FitmentPipeline(dspy.Module):
                 parsed.get("make"), model, parsed.get("chassis_code"),
                 db_specs["bolt_pattern"], db_specs.get("verified"),
             )
+            # Mark DB results as trusted — they're our source of truth
+            db_specs["_from_db"] = True
             return db_specs
 
         logger.info(
@@ -936,13 +942,22 @@ class FitmentPipeline(dspy.Module):
 
             confidence = min(float(result.confidence), 0.65)
 
+            oem_d = int(result.oem_diameter)
+            min_d = int(result.min_diameter)
+            max_d = int(result.max_diameter)
+
+            # Clamp diameter range relative to OEM — LLM often overshoots
+            # for classic cars (e.g. E30 M3 OEM is 15", LLM says max 20")
+            max_d = min(max_d, oem_d + 3)
+            min_d = max(min_d, oem_d - 2, 13)
+
             return {
                 "bolt_pattern": bolt_pattern,
                 "center_bore": center_bore,
                 "stud_size": str(result.stud_size).strip(),
-                "oem_diameter": int(result.oem_diameter),
-                "min_diameter": int(result.min_diameter),
-                "max_diameter": int(result.max_diameter),
+                "oem_diameter": oem_d,
+                "min_diameter": min_d,
+                "max_diameter": max_d,
                 "oem_width": float(result.oem_width),
                 "min_width": float(result.min_width),
                 "max_width": float(result.max_width),
@@ -1061,8 +1076,11 @@ class FitmentPipeline(dspy.Module):
         susp = suspension or "stock"
 
         # Get OEM specs for math calculations
-        oem_width = specs.get("oem_width", specs.get("min_width", 7.0))
-        oem_offset = specs.get("oem_offset", (specs.get("min_offset", 20) + specs.get("max_offset", 40)) // 2)
+        # Use `or` instead of default arg because DB may have key=None (old schema)
+        oem_width = specs.get("oem_width") or specs.get("min_width") or 7.0
+        oem_offset = specs.get("oem_offset") or (
+            ((specs.get("min_offset") or 20) + (specs.get("max_offset") or 40)) // 2
+        )
 
         # Filter wheels using math-based calculations
         valid_wheels = []
