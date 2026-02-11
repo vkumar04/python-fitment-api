@@ -122,5 +122,25 @@
       "285/55R22"
     ],
     "stud_size": ""
+  },
+  "2020_honda_civic": {
+    "year": 2020,
+    "make": "Honda",
+    "model": "Civic",
+    "bolt_pattern": "5X114.3",
+    "center_bore": 0.0,
+    "oem_offset_min": 43,
+    "oem_offset_max": 52,
+    "oem_wheel_sizes": [
+      "16x7",
+      "17x7",
+      "18x8"
+    ],
+    "oem_tire_sizes": [
+      "215/55R16",
+      "215/50R17",
+      "235/40ZR18"
+    ],
+    "stud_size": ""
   }
 }

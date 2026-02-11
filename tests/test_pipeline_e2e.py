@@ -96,6 +96,33 @@ def test_vehicle(query: str, expected_bolt: str, expected_make: str):
         print(f"  WARNING: No fitment data at all (no Kansei wheels, no community fitments)")
         return False, "No fitment data returned"
 
+    # E39 M5 specific checks: brake clearance + staggered detection
+    if "E39" in query and "M5" in query and not any(
+        s in query.lower() for s in ("flush", "aggressive", "coil", "lower")
+    ):
+        brake_min = specs.get("min_brake_clearance_diameter")
+        if brake_min is None or brake_min < 17:
+            print(f"  FAIL: E39 M5 should have brake clearance >= 17\", got {brake_min}")
+            return False, f"E39 M5 missing brake clearance: {brake_min}"
+
+        is_staggered = specs.get("is_staggered_stock")
+        if not is_staggered:
+            print(f"  FAIL: E39 M5 should be detected as staggered stock")
+            return False, "E39 M5 not detected as staggered"
+
+        # No 17" wheels should be recommended
+        for w in kansei:
+            if int(w.get("diameter", 0)) < 18:
+                print(f"  FAIL: E39 M5 got sub-18\" wheel: {w.get('diameter')}\"")
+                return False, f"E39 M5 got {w.get('diameter')}\" wheel (below brake clearance)"
+
+        oem_w = specs.get("oem_width")
+        if oem_w is None:
+            print(f"  FAIL: E39 M5 should have oem_width enriched from LLM")
+            return False, "E39 M5 oem_width is None"
+
+        print(f"  E39 M5 checks: brake_min={brake_min}, staggered={is_staggered}, oem_width={oem_w}")
+
     print(f"  PASS")
     return True, None
 
@@ -111,6 +138,9 @@ def main():
         ("E30 M3", "5x120", "BMW"),
         ("E36 M3", "5x120", "BMW"),
         ("2020 Honda Civic", "5x114.3", "Honda"),
+
+        # Big brakes / staggered stock (E39 M5)
+        ("E39 M5", "5x120", "BMW"),
 
         # Fitment style tests (square, flush, aggressive)
         ("E30 M3 flush fitment", "5x120", "BMW"),

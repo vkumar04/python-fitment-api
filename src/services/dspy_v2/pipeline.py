@@ -706,6 +706,7 @@ class FitmentPipeline(dspy.Module):
             validated_wheels["valid"],
             fitment_style=parsed_info.get("fitment_style"),
             suspension=parsed_info.get("suspension"),
+            specs=specs,
         )
 
         return RetrievalResult(
@@ -790,8 +791,9 @@ class FitmentPipeline(dspy.Module):
                 # DSPy sometimes appends schema notes to values like:
                 # "Honda        # note: the value you produce must adhere..."
                 val = val.split("# note:")[0].split("#")[0].strip()
-                # DSPy sometimes wraps values in quotes
-                if val.startswith('"') and val.endswith('"'):
+                # DSPy sometimes wraps values in quotes (single or double)
+                if (val.startswith('"') and val.endswith('"')) or \
+                   (val.startswith("'") and val.endswith("'")):
                     val = val[1:-1]
                 if not val or val.lower() == "none":
                     return None
@@ -846,6 +848,36 @@ class FitmentPipeline(dspy.Module):
             )
             # Mark DB results as trusted — they're our source of truth
             db_specs["_from_db"] = True
+
+            # If DB has bolt pattern but is missing OEM specs (old schema),
+            # enrich with LLM-resolved values for accurate poke calculations
+            # and brake clearance checks
+            missing_oem = (
+                db_specs.get("oem_width") is None
+                or db_specs.get("oem_offset") is None
+                or db_specs.get("oem_diameter") is None
+            )
+            if missing_oem:
+                logger.info(
+                    "DB specs missing OEM values — enriching with LLM for %s %s",
+                    parsed.get("make"), model,
+                )
+                llm_enrichment = self._resolve_via_llm(parsed)
+                if llm_enrichment:
+                    # Only fill in what's missing; DB bolt pattern is authoritative
+                    for key in (
+                        "oem_diameter", "oem_width", "oem_offset",
+                        "oem_rear_width", "oem_rear_offset",
+                        "is_staggered_stock", "min_brake_clearance_diameter",
+                    ):
+                        if db_specs.get(key) is None and key in llm_enrichment:
+                            db_specs[key] = llm_enrichment[key]
+                    # Also update diameter/width/offset ranges if DB has defaults
+                    if db_specs.get("min_diameter") == 15 and llm_enrichment.get("min_diameter"):
+                        db_specs["min_diameter"] = llm_enrichment["min_diameter"]
+                    if db_specs.get("max_diameter") == 20 and llm_enrichment.get("max_diameter"):
+                        db_specs["max_diameter"] = llm_enrichment["max_diameter"]
+
             return db_specs
 
         logger.info(
@@ -930,7 +962,7 @@ class FitmentPipeline(dspy.Module):
                 trim=parsed.get("trim"),
             )
 
-            bolt_pattern = str(result.bolt_pattern).strip()
+            bolt_pattern = str(result.bolt_pattern).strip().strip("'\"")
             if not validate_bolt_pattern(bolt_pattern):
                 logger.warning("LLM returned invalid bolt pattern: %s", bolt_pattern)
                 return None
@@ -946,24 +978,47 @@ class FitmentPipeline(dspy.Module):
             min_d = int(result.min_diameter)
             max_d = int(result.max_diameter)
 
+            # Enforce brake clearance minimum
+            try:
+                brake_min = int(result.min_brake_clearance_diameter)
+            except (ValueError, TypeError, AttributeError):
+                brake_min = oem_d  # Fallback: assume stock diameter clears
+            min_d = max(min_d, brake_min)
+
             # Clamp diameter range relative to OEM — LLM often overshoots
             # for classic cars (e.g. E30 M3 OEM is 15", LLM says max 20")
             max_d = min(max_d, oem_d + 3)
             min_d = max(min_d, oem_d - 2, 13)
 
+            # Staggered stock detection
+            is_staggered = False
+            oem_rear_width = float(result.oem_width)
+            oem_rear_offset = int(result.oem_offset)
+            try:
+                is_staggered = str(result.is_staggered_stock).lower() == "true"
+                if is_staggered:
+                    oem_rear_width = float(result.oem_rear_width)
+                    oem_rear_offset = int(result.oem_rear_offset)
+            except (ValueError, TypeError, AttributeError):
+                pass
+
             return {
                 "bolt_pattern": bolt_pattern,
                 "center_bore": center_bore,
-                "stud_size": str(result.stud_size).strip(),
+                "stud_size": str(result.stud_size).strip().strip("'\""),
                 "oem_diameter": oem_d,
+                "min_brake_clearance_diameter": brake_min,
                 "min_diameter": min_d,
                 "max_diameter": max_d,
                 "oem_width": float(result.oem_width),
+                "oem_rear_width": oem_rear_width,
                 "min_width": float(result.min_width),
                 "max_width": float(result.max_width),
                 "oem_offset": int(result.oem_offset),
+                "oem_rear_offset": oem_rear_offset,
                 "min_offset": int(result.min_offset),
                 "max_offset": int(result.max_offset),
+                "is_staggered_stock": is_staggered,
                 "source": "dspy_llm",
                 "source_url": str(result.source_url).strip(),
                 "confidence": confidence,
@@ -1081,6 +1136,13 @@ class FitmentPipeline(dspy.Module):
         oem_offset = specs.get("oem_offset") or (
             ((specs.get("min_offset") or 20) + (specs.get("max_offset") or 40)) // 2
         )
+        # For staggered-stock vehicles, track rear OEM specs separately
+        is_staggered = specs.get("is_staggered_stock", False)
+        oem_rear_width = specs.get("oem_rear_width") or oem_width
+        oem_rear_offset = specs.get("oem_rear_offset") or oem_offset
+
+        # Brake clearance minimum
+        brake_min = specs.get("min_brake_clearance_diameter") or specs.get("min_diameter") or 15
 
         # Filter wheels using math-based calculations
         valid_wheels = []
@@ -1093,17 +1155,17 @@ class FitmentPipeline(dspy.Module):
 
             rejection_reasons = []
 
-            # Check diameter bounds first (these are hard limits)
-            if diameter < specs.get("min_diameter", 15):
+            # Check brake clearance first (hard physical limit)
+            if diameter < brake_min:
                 rejection_reasons.append(
-                    f'Diameter {diameter}" too small (min {specs.get("min_diameter")}")'
+                    f'Diameter {diameter}" won\'t clear brake calipers (minimum {brake_min}")'
                 )
             elif diameter > specs.get("max_diameter", 20):
                 rejection_reasons.append(
                     f'Diameter {diameter}" too large (max {specs.get("max_diameter")}")'
                 )
 
-            # Use math-based fitment calculation
+            # Use math-based fitment calculation (front baseline)
             fitment_calc = calculate_wheel_fitment(
                 wheel_width_inches=width,
                 wheel_offset_mm=offset,
@@ -1111,6 +1173,22 @@ class FitmentPipeline(dspy.Module):
                 oem_offset_mm=oem_offset,
                 suspension=susp,
             )
+
+            # For staggered-stock vehicles, also calculate rear fitment
+            # so we can warn about width/offset mismatch
+            if is_staggered and oem_rear_width != oem_width:
+                rear_calc = calculate_wheel_fitment(
+                    wheel_width_inches=width,
+                    wheel_offset_mm=offset,
+                    oem_width_inches=oem_rear_width,
+                    oem_offset_mm=oem_rear_offset,
+                    suspension=susp,
+                )
+                fitment_calc["rear_poke_mm"] = rear_calc["poke_mm"]
+                fitment_calc["rear_style"] = rear_calc["style"]
+                fitment_calc["is_staggered_stock"] = True
+            else:
+                fitment_calc["is_staggered_stock"] = False
 
             # Check if math says it fits
             if not fitment_calc["fits_without_mods"] and fitment_calc["poke_mm"] > 25:
@@ -1152,6 +1230,18 @@ class FitmentPipeline(dspy.Module):
 
                 if diameter == specs.get("max_diameter"):
                     notes.append("maximum recommended diameter")
+
+                # Brake clearance warning for minimum-clearing sizes
+                if diameter == brake_min:
+                    notes.append("minimum diameter — verify brake caliper clearance before purchase")
+
+                # Staggered-stock warning
+                if fitment_calc.get("is_staggered_stock"):
+                    rear_poke = fitment_calc.get("rear_poke_mm", 0)
+                    notes.append(
+                        f"⚠️ vehicle is staggered from factory — "
+                        f"this square setup changes rear: {rear_poke:+.0f}mm vs stock"
+                    )
 
                 wheel["fitment_notes"] = notes
                 wheel["fitment_calc"] = fitment_calc
@@ -1257,11 +1347,32 @@ class FitmentPipeline(dspy.Module):
                     f"Hub-specific SKUs or professional machining required."
                 )
 
+        # Brake clearance note
+        brake_note = ""
+        brake_min = specs.get("min_brake_clearance_diameter")
+        if brake_min and brake_min >= 17:
+            brake_note = f"\n⚠️ Minimum {brake_min}\" required for brake clearance"
+
+        # Staggered stock note
+        stagger_note = ""
+        if specs.get("is_staggered_stock"):
+            oem_w = specs.get("oem_width", "?")
+            oem_rw = specs.get("oem_rear_width", "?")
+            stagger_note = f"\nFactory setup: staggered ({oem_w}\" front / {oem_rw}\" rear)"
+
+        # OEM reference
+        oem_note = ""
+        oem_d = specs.get("oem_diameter")
+        oem_w = specs.get("oem_width")
+        oem_o = specs.get("oem_offset")
+        if oem_d and oem_w and oem_o:
+            oem_note = f"\nStock wheels: {oem_d}x{oem_w} +{oem_o}"
+
         specs_summary = f"""Bolt Pattern: {specs.get("bolt_pattern", "Unknown")}
 Center Bore: {center_bore}mm{hub_ring_note}
-Wheel Diameter: {specs.get("min_diameter", 15)}" to {specs.get("max_diameter", 20)}"
+Wheel Diameter: {specs.get("min_diameter", 15)}" to {specs.get("max_diameter", 20)}"{brake_note}
 Width Range: {specs.get("min_width", 6.0)}" to {specs.get("max_width", 10.0)}"
-Offset Range: +{specs.get("min_offset", -10)} to +{specs.get("max_offset", 50)}"""
+Offset Range: +{specs.get("min_offset", -10)} to +{specs.get("max_offset", 50)}{oem_note}{stagger_note}"""
 
         return vehicle_summary, specs_summary
 
