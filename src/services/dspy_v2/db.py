@@ -25,69 +25,103 @@ def find_vehicle_specs(
 ) -> dict[str, Any] | None:
     """Find vehicle specs from the database.
 
+    Uses a direct table query instead of an RPC to ensure correct model
+    matching and compatibility with both old and new DB schemas.
+
     Returns the best matching spec or None if not found.
     """
-    result = (
-        _get_client()
-        .rpc(
-            "find_vehicle_specs",
-            {
-                "p_year": year,
-                "p_make": make,
-                "p_model": model,
-                "p_chassis_code": chassis_code,
-            },
-        )
-        .execute()
-    )
+    client = _get_client()
+    query = client.table("vehicle_specs").select("*")
 
-    if result.data and isinstance(result.data, list) and len(result.data) > 0:
-        row = result.data[0]
-        if isinstance(row, dict):
-            return {
-                "id": row.get("id"),
-                "year_start": row.get("year_start"),
-                "year_end": row.get("year_end"),
-                "make": row.get("make"),
-                "model": row.get("model"),
-                "chassis_code": row.get("chassis_code"),
-                "trim": row.get("trim"),
-                "bolt_pattern": row.get("bolt_pattern"),
-                "center_bore": _safe_float(row.get("center_bore"), 0.0),
-                "stud_size": row.get("stud_size"),
-                "oem_diameter": _safe_float(row.get("oem_diameter"))
-                if row.get("oem_diameter")
-                else None,
-                "min_diameter": _safe_int(row.get("min_diameter"), 15),
-                "max_diameter": _safe_int(row.get("max_diameter"), 20),
-                "oem_width": _safe_float(row.get("oem_width"))
-                if row.get("oem_width")
-                else None,
-                "min_width": _safe_float(row.get("min_width"), 6.0),
-                "max_width": _safe_float(row.get("max_width"), 10.0),
-                "oem_offset": _safe_int(row.get("oem_offset"))
-                if row.get("oem_offset")
-                else None,
-                "min_offset": _safe_int(row.get("min_offset"), -10),
-                "max_offset": _safe_int(row.get("max_offset"), 50),
-                "stock_offset_adjustment": _safe_int(
-                    row.get("stock_offset_adjustment"), 0
-                ),
-                "lowered_offset_adjustment": _safe_int(
-                    row.get("lowered_offset_adjustment"), -5
-                ),
-                "coilover_offset_adjustment": _safe_int(
-                    row.get("coilover_offset_adjustment"), -10
-                ),
-                "air_offset_adjustment": _safe_int(
-                    row.get("air_offset_adjustment"), -15
-                ),
-                "source": row.get("source"),
-                "verified": row.get("verified", False),
-                "confidence": _safe_float(row.get("confidence"), 0.8),
-            }
+    if make:
+        query = query.ilike("make", make)
+    if model:
+        query = query.ilike("model", model)
+    if chassis_code:
+        query = query.ilike("chassis_code", chassis_code)
 
-    return None
+    result = query.limit(10).execute()
+
+    if not result.data or not isinstance(result.data, list):
+        return None
+
+    # Filter and score results in Python for accurate matching
+    best: dict[str, Any] | None = None
+    best_score = -1
+
+    for row in result.data:
+        if not isinstance(row, dict):
+            continue
+
+        score = 0
+
+        # Year match: row must span the requested year
+        if year:
+            y_start = _safe_int(row.get("year_start"))
+            y_end = _safe_int(row.get("year_end"))
+            if y_start is not None and year < y_start:
+                continue
+            if y_end is not None and year > y_end:
+                continue
+            score += 1  # Year is within range
+
+        # Exact model match scores higher than substring match
+        row_model = str(row.get("model") or "").lower()
+        if model and model.lower() == row_model:
+            score += 10  # Exact match
+        elif model and model.lower() in row_model:
+            score += 2  # Substring match
+
+        # Chassis code match
+        row_chassis = str(row.get("chassis_code") or "")
+        if chassis_code and row_chassis:
+            if chassis_code.upper() == row_chassis.upper():
+                score += 5
+
+        # Prefer verified / high-confidence rows (new schema)
+        if row.get("verified"):
+            score += 3
+        confidence = _safe_float(row.get("confidence"), 0.0)
+        if confidence >= 0.8:
+            score += 2
+
+        if score > best_score:
+            best_score = score
+            best = row
+
+    if best is None:
+        return None
+
+    return {
+        "id": best.get("id"),
+        "year_start": best.get("year_start"),
+        "year_end": best.get("year_end"),
+        "make": best.get("make"),
+        "model": best.get("model"),
+        "chassis_code": best.get("chassis_code"),
+        "trim": best.get("trim"),
+        "bolt_pattern": best.get("bolt_pattern"),
+        "center_bore": _safe_float(best.get("center_bore"), 0.0),
+        "stud_size": best.get("stud_size"),
+        "oem_diameter": _safe_float(best.get("oem_diameter"))
+        if best.get("oem_diameter")
+        else None,
+        "min_diameter": _safe_int(best.get("min_diameter"), 15),
+        "max_diameter": _safe_int(best.get("max_diameter"), 20),
+        "oem_width": _safe_float(best.get("oem_width"))
+        if best.get("oem_width")
+        else None,
+        "min_width": _safe_float(best.get("min_width"), 6.0),
+        "max_width": _safe_float(best.get("max_width"), 10.0),
+        "oem_offset": _safe_int(best.get("oem_offset"))
+        if best.get("oem_offset")
+        else None,
+        "min_offset": _safe_int(best.get("min_offset"), -10),
+        "max_offset": _safe_int(best.get("max_offset"), 50),
+        "source": best.get("source"),
+        "verified": best.get("verified", False),
+        "confidence": _safe_float(best.get("confidence"), 0.8),
+    }
 
 
 def save_vehicle_specs(
