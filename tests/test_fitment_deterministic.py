@@ -330,12 +330,10 @@ class TestHubBoreCompatibility:
         # Here we just verify the center_bore data exists
         # (72.6mm hub < 73.1mm bore → hub rings needed)
 
-    def test_e39_m5_hub_74_1_vs_kansei_73_1(self):
-        """E39 M5 has 74.1mm hub (not 72.6mm like other 5x120 BMWs).
-
-        Kansei bore is 73.1mm — wheel bore < hub bore = incompatible.
-        Center bore comes from DB/vehicle_specs, not oem_specs registry.
-        """
+    def test_e39_m5_hub_72_6_vs_kansei_73_1(self):
+        """E39 M5 has 72.6mm hub. Kansei is 73.1mm bore → hub rings."""
+        # The center bore comes from DB/specs, not oem_specs.
+        # Just verify OEM registry has the data we need for staggered warnings.
         oem = lookup_oem_specs("BMW", "M5", "E39")
         assert oem is not None
         assert oem["is_staggered_stock"] is True
