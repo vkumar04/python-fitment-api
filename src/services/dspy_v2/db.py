@@ -201,7 +201,8 @@ def find_kansei_wheels(
     query = (
         client.table("kansei_wheels")
         .select(
-            "id, model, finish, sku, diameter, width, bolt_pattern, wheel_offset, price, category, url, in_stock, weight"
+            "id, model, finish, sku, diameter, width, bolt_pattern, wheel_offset, "
+            "price, category, url, in_stock, weight, construction, brake_clearance_notes"
         )
         .ilike("bolt_pattern", bolt_pattern)
     )
@@ -240,6 +241,8 @@ def find_kansei_wheels(
                         "weight": _safe_float(row.get("weight"))
                         if row.get("weight")
                         else None,
+                        "construction": row.get("construction"),
+                        "brake_clearance_notes": row.get("brake_clearance_notes"),
                     }
                 )
 
@@ -437,12 +440,14 @@ def format_kansei_for_prompt(wheels: list[dict[str, Any]]) -> str:
             size_str = f"{d}x{width} +{offset}"
             math_info = f"({poke:+.0f}mm poke, {style})"
             mod_info = f" — {', '.join(mods)}" if mods else ""
+            weight = w.get("weight")
+            weight_str = f" [{weight}lb]" if weight else ""
 
             url = w.get("url", "")
             if url:
-                result.append(f"- [{size_str}]({url}) {math_info}{mod_info}")
+                result.append(f"- [{size_str}]({url}) {math_info}{weight_str}{mod_info}")
             else:
-                result.append(f"- {size_str} {math_info}{mod_info}")
+                result.append(f"- {size_str} {math_info}{weight_str}{mod_info}")
 
         return result if len(result) > 1 else []
 
