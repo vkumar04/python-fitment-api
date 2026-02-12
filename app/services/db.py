@@ -1,10 +1,9 @@
-"""Shared Supabase client - single lazy-loaded instance for the entire app."""
+"""Shared Supabase client — single lazy-loaded instance for the entire app."""
 
 import threading
 
+from app.config import get_settings
 from supabase import Client, create_client
-
-from ..core.config import get_settings
 
 _supabase: Client | None = None
 _client_lock = threading.Lock()

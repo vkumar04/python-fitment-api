@@ -10,7 +10,7 @@ if __name__ == "__main__":
     # singleton state (Supabase client, DSPy pipeline) on Linux.
     workers = int(os.environ.get("WEB_CONCURRENCY", 1))
     uvicorn.run(
-        "src.app.main:app",
+        "app.main:app",
         host="0.0.0.0",
         port=port,
         workers=workers,

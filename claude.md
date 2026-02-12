@@ -1,72 +1,58 @@
-# Wheel Fitment RAG API
+# Kansei Fitment Assistant API
 
-Python FastAPI app using RAG to help customers find wheel/tire fitments. DSPy pipeline parses queries and retrieves context, OpenAI streams the final response.
+AI-powered wheel fitment recommendation engine for Kansei Wheels. Uses DSPy ReAct agent for conversational queries, NHTSA vPIC API for VIN decoding, and a fitment scoring engine for structured recommendations.
 
 ## Quick Reference
 
 ```bash
-uv sync                                              # Install dependencies
-uv run uvicorn src.app.main:app --reload --port 8000  # Dev server
-uv run pytest tests/                                  # Run tests (needs OPENAI_API_KEY)
-uv run ruff check src/                                # Lint
-uv run pyright src/                                   # Type check
+uv sync                                          # Install dependencies
+uv run uvicorn app.main:app --reload --port 8000  # Dev server
+uv run pytest tests/                              # Run tests
+uv run ruff check app/                            # Lint
+uv run pyright app/                               # Type check
 ```
 
 ## Tech Stack
 
 - **Python 3.12** with **uv** for package management
-- **FastAPI** (fully async endpoints)
-- **Supabase** (PostgreSQL + pgvector) for storage and full-text search
-- **OpenAI** for streaming chat responses (`AsyncOpenAI`)
-- **DSPy** for structured query parsing and vehicle spec resolution
-- **slowapi** for rate limiting
+- **FastAPI** (async endpoints)
+- **Supabase** (PostgreSQL) for Kansei wheel catalog, vehicle specs, community fitments
+- **DSPy** ReAct agent for conversational fitment assistance
+- **NHTSA vPIC API** for VIN decoding and make/model lookups
+- **httpx** for async HTTP
 
 ## Project Structure
 
 ```
 python-rag/
-├── src/
-│   ├── app/
-│   │   └── main.py                  # FastAPI app, endpoints, request models
-│   ├── core/
-│   │   ├── config.py                # Pydantic settings & env validation
-│   │   ├── dependencies.py          # FastAPI dependency injection
-│   │   ├── enums.py                 # FitmentStyle, SuspensionType enums
-│   │   └── logging.py              # Structured logging
-│   ├── db/
-│   │   ├── client.py               # Supabase client singleton
-│   │   └── fitments.py             # Async Supabase queries
+├── app/
+│   ├── main.py                      # FastAPI app entry point
+│   ├── config.py                    # Pydantic settings & env vars
 │   ├── models/
-│   │   └── fitment.py              # Pydantic models (FitmentData, FitmentQuery, etc.)
+│   │   ├── vehicle.py               # VehicleIdentification, VehicleSpecs
+│   │   ├── wheel.py                 # KanseiWheel
+│   │   └── fitment.py               # FitmentResult, FitmentResponse
 │   ├── services/
-│   │   ├── rag_service.py          # Orchestrates DSPy retrieval + OpenAI streaming
-│   │   ├── fitment.py              # Fitment classification utilities
-│   │   ├── kansei_scraper.py       # Kansei wheel catalog scraping
-│   │   ├── wheel_size_lookup.py    # OEM specs from wheel-size.com
-│   │   └── dspy_v2/               # Core DSPy pipeline
-│   │       ├── pipeline.py         # FitmentPipeline: parse → resolve → validate → fetch
-│   │       ├── signatures.py       # DSPy signatures (ParseVehicleInput, etc.)
-│   │       ├── tools.py            # Knowledge base + web scraping for vehicle specs
-│   │       └── db.py               # Database queries used by pipeline
-│   ├── prompts/
-│   │   └── fitment_assistant.py    # System prompts for OpenAI
-│   └── utils/
-│       └── converters.py           # Type conversion utilities
+│   │   ├── db.py                    # Supabase client singleton
+│   │   ├── kansei_db.py             # Kansei wheel + vehicle spec queries
+│   │   ├── nhtsa.py                 # NHTSA vPIC async client
+│   │   └── fitment_engine.py        # Scoring engine + vehicle knowledge base
+│   ├── dspy_modules/
+│   │   ├── signatures.py            # IdentifyVehicle, RecommendWheels, FitmentQA
+│   │   └── conversational.py        # KanseiFitmentAgent (ReAct)
+│   ├── api/
+│   │   ├── routes.py                # All API route definitions
+│   │   └── deps.py                  # Dependency injection
+│   └── tools/
+│       └── nhtsa_tools.py           # Sync tool wrappers for DSPy
 ├── tests/
-│   ├── test_fitment_queries.py     # Integration tests (requires running server)
-│   ├── test_dspy_pipeline.py       # Unit tests for DSPy pipeline
-│   └── test_bolt_patterns.py       # Bolt pattern validation tests
-├── datafiles/
-│   ├── Fitment-data-master.csv     # Community fitment data (54k+ records)
-│   ├── kansei_wheels.json          # Scraped Kansei wheel catalog
-│   └── wheel_size_cache.json       # Cached OEM specs from wheel-size.com
+│   └── test_fitment_engine.py       # Knowledge base + scoring tests
 ├── supabase/
-│   └── migrations/                 # Database migrations
-├── supabase_setup.sql              # Database schema + indexes
-├── run.py                          # Production entry point (reads PORT env)
+│   └── migrations/                  # Database schema (canonical)
+├── run.py                           # Production entry point
 ├── pyproject.toml
 ├── Dockerfile
-├── nixpacks.toml                   # Railway build config
+├── nixpacks.toml
 └── railway.toml
 ```
 
@@ -75,20 +61,21 @@ python-rag/
 ### Request Flow
 
 ```
-POST /api/chat → RAGService.ask_streaming()
-  1. DSPy pipeline (sync, runs in asyncio.to_thread):
-     ParseVehicleInput → ResolveSpecs → ValidateSpecs → FetchData
-  2. OpenAI streams response using retrieved context (AsyncOpenAI)
-  3. SSE events sent to client (Vercel AI SDK Data Stream Protocol)
+POST /api/v1/chat     → DSPy ReAct agent (tools: VIN decode, wheel search)
+POST /api/v1/fitment  → Knowledge base → Kansei DB query → Score wheels → AI summary
+POST /api/v1/decode-vin → NHTSA vPIC API
+GET  /api/v1/makes     → NHTSA API
+GET  /api/v1/models/{make}/{year} → NHTSA API
+GET  /api/v1/catalog/bolt-patterns → Supabase
 ```
 
 ### Key Design Decisions
 
-- **DSPy pipeline is synchronous** — runs inside `asyncio.to_thread()` since DSPy doesn't support async
-- **Spec resolution order**: hardcoded knowledge base → wheel-size.com scraping → LLM fallback
-- **Supabase client** is a lazy singleton (`src/db/client.py`)
-- **LRU caching** on query parsing to avoid redundant LLM calls
-- **Full-text search** via PostgreSQL tsvector (not vector embeddings)
+- **Spec resolution order**: hardcoded knowledge base (300+ vehicles) → Supabase DB → NHTSA API
+- **Fitment scoring**: 0.0–1.0 score based on offset delta, diameter delta, width, hub bore
+- **Supabase client** is a lazy singleton (`app/services/db.py`)
+- **DSPy ReAct agent** uses tools for VIN decode, model lookup, and wheel search
+- **Knowledge base** in `fitment_engine.py` covers BMW (E21–G82), Honda, Subaru, Toyota, Nissan, Mazda, Mitsubishi, VW, Audi, Mercedes, Porsche, Ford, Chevy, Dodge, Ram, Tesla, Datsun
 
 ## Environment Variables
 
@@ -96,66 +83,51 @@ POST /api/chat → RAGService.ask_streaming()
 # Required
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your_supabase_anon_key
+
+# LLM (at least one required)
 OPENAI_API_KEY=your_openai_api_key
+ANTHROPIC_API_KEY=your_anthropic_key    # Optional
 
 # Optional
-OPENAI_MODEL=gpt-4o-mini          # Model for chat responses
-OPENAI_MAX_TOKENS=512             # Max tokens per response
-DSPY_MODEL=openai/gpt-4o          # Model for DSPy pipeline
-API_ADMIN_KEY=your_admin_key      # Required for /api/load-data
-ALLOWED_ORIGINS=http://localhost:3000,https://yourapp.com
-RATE_LIMIT_REQUESTS=30            # Per period per IP
-RATE_LIMIT_PERIOD=60              # Period in seconds
+DSPY_MODEL=openai/gpt-4o               # Or anthropic/claude-sonnet-4-20250514
+NHTSA_BASE_URL=https://vpic.nhtsa.dot.gov/api
+ALLOWED_ORIGINS=*
 ```
 
 ## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Basic health check (`?detailed=true` checks Supabase + OpenAI) |
-| `POST` | `/api/chat` | Streaming chat (SSE, Vercel AI SDK compatible, 30 req/min) |
-| `GET` | `/api/makes` | All vehicle makes |
-| `GET` | `/api/models/{make}` | Models for a make |
-| `GET` | `/api/years` | All years |
-| `GET` | `/api/fitment-styles` | Fitment style enum values |
-| `POST` | `/api/load-data` | Load CSV data (requires `X-Admin-Key` header) |
+| `GET` | `/health` | Health check |
+| `POST` | `/api/v1/chat` | Conversational fitment assistant (DSPy ReAct) |
+| `POST` | `/api/v1/fitment` | Structured fitment with scoring |
+| `POST` | `/api/v1/decode-vin` | VIN decode via NHTSA |
+| `GET` | `/api/v1/makes` | All vehicle makes (NHTSA) |
+| `GET` | `/api/v1/models/{make}/{year}` | Models for make+year (NHTSA) |
+| `GET` | `/api/v1/catalog/bolt-patterns` | Kansei catalog bolt patterns |
 
-## Database
+## Database (Supabase)
 
-The `fitments` table uses PostgreSQL full-text search:
+Three tables in PostgreSQL:
 
-- Vehicle ID: `year`, `make`, `model`
-- Wheel specs: `front_*` / `rear_*` (diameter, width, offset, backspacing, spacer)
-- Tires: `tire_front`, `tire_rear`
-- Classification: `fitment_setup` (square/staggered), `fitment_style` (aggressive/flush/tucked)
-- Flags: `has_poke`, `needs_mods`
-- Search: `fts` generated tsvector column
+- **`kansei_wheels`** (484 rows) — Kansei product catalog (model, finish, sku, diameter, width, bolt_pattern, wheel_offset, price, category, url, in_stock, weight)
+- **`vehicle_specs`** (50+ rows) — Verified vehicle specs with bolt pattern, center bore, offset/diameter/width ranges
+- **`fitments`** (54k+ rows) — Community fitment data with full-text search
 
-Composite indexes on `(year, make, model)`, `(make, model)`, `(make, fitment_style)`, `(year, fitment_style)`.
+PostgreSQL functions: `search_fitments`, `find_vehicle_specs`, `upsert_vehicle_specs`, `get_makes`, `get_models`, `get_years`
 
-Schema defined in `supabase_setup.sql`. Migrations in `supabase/migrations/`.
+Schema in `supabase/migrations/`.
 
 ## Testing
 
-Tests require `OPENAI_API_KEY`. Integration tests in `test_fitment_queries.py` make HTTP calls to a running server.
-
 ```bash
-uv run pytest tests/                        # All tests
-uv run pytest tests/test_bolt_patterns.py   # Just bolt pattern tests (no API key needed)
-uv run pytest tests/test_dspy_pipeline.py   # Pipeline unit tests
+uv run pytest tests/                            # All tests
+uv run pytest tests/test_fitment_engine.py -v   # Knowledge base + scoring (no API key needed)
 ```
 
 ## Deployment (Railway)
 
-- `nixpacks.toml` configures the build (`uv sync --frozen`)
-- `run.py` is the entry point, reads `PORT` from environment
-- `Dockerfile` available as alternative build path
-- Auto-deploys on push to main
-- Supabase `pg_cron` pings `/health` every 5 minutes to prevent free tier sleep
-
-## Development Notes
-
-- Run `uv run ruff check src/` and `uv run pyright src/` before committing
-- Frontend (Next.js) should set `streamProtocol: 'data'` in `useChat()`
-- 54,570 community fitment records in the database
-- `wheel_size_cache.json` caches OEM specs to avoid repeated scraping
+- `nixpacks.toml` configures build (`uv sync --frozen`)
+- `run.py` reads `PORT` from environment
+- `Dockerfile` available as alternative
+- Health check at `/health`
